@@ -98,6 +98,16 @@ function readTemplateOptionalQualityCheckRuleIds(repoRoot: string): string[] {
     return templateConfig.optional_quality_checks.rules.map((rule: { id: string }) => rule.id);
 }
 
+
+function seedHistoricalCommands(repoRoot: string, liveRuleDir: string, compileCommand?: string): void {
+    let content = fs.readFileSync(path.join(repoRoot, 'tests/node/fixtures/online-store-installed-rules/40-commands.md'), 'utf8');
+    if (compileCommand) content = content.replace(
+        /(^### Compile Gate \(Mandatory\)[\s\S]*?\x60\x60\x60[^\r\n]*\r?\n)[\s\S]*?(\r?\n\x60\x60\x60)/mu,
+        (_raw, head: string, tail: string) => head + compileCommand + tail
+    );
+    fs.writeFileSync(path.join(liveRuleDir, '40-commands.md'), content);
+}
+
 function setupUpdateWorkspace(repoRoot: string) {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-update-'));
     const bundle = path.join(tmpDir, 'garda-agent-orchestrator');
@@ -261,9 +271,10 @@ describe('runUpdate', () => {
                 assert.ok(!content.includes('savings are reported in the implementation summary'), relativePath);
             }
             assert.equal(fs.readFileSync(memoryPath, 'utf8'), userMemory, 'User-owned memory must survive update');
-            assert.equal(fs.readFileSync(path.join(liveRuleDir, '80-task-workflow.md'), 'utf8'),
-                workflowTemplate.replace(reportingLine, `${reportingLine}\n${userRule}`),
-                'Only the known legacy reporting line should change; user rule text must survive');
+            assert.equal(fs.readFileSync(path.join(liveRuleDir, '80-task-workflow.md'), 'utf8'), workflowTemplate);
+            const priorWorkflow = result.ruleRefresh.find(entry => entry.ruleFile === '80-task-workflow.md');
+            assert.ok(priorWorkflow?.backupPath);
+            assert.ok(fs.readFileSync(path.join(projectRoot, priorWorkflow.backupPath), 'utf8').includes(userRule));
 
             // skills-index.json should be regenerated, not stale
             const skillsIndex = JSON.parse(fs.readFileSync(path.join(liveConfigDir, 'skills-index.json'), 'utf8'));
@@ -1494,14 +1505,7 @@ describe('runUpdate', () => {
         try {
             const liveRuleDir = path.join(bundleRoot, 'live', 'docs', 'agent-rules');
             fs.mkdirSync(liveRuleDir, { recursive: true });
-            fs.writeFileSync(path.join(liveRuleDir, '40-commands.md'), [
-                '# Commands',
-                '',
-                '## Agent Gates',
-                '```bash',
-                'node garda-agent-orchestrator/bin/garda.js gate classify-change --changed-file "src/example.ts"',
-                '```'
-            ].join('\n'), 'utf8');
+            seedHistoricalCommands(repoRoot, liveRuleDir);
             fs.writeFileSync(path.join(liveRuleDir, '80-task-workflow.md'), [
                 '# Task Workflow',
                 '',
@@ -1570,12 +1574,11 @@ describe('runUpdate', () => {
             assert.equal(result.contractMigrationStatus, 'PASS');
             assert.equal(result.verifyStatus, 'PASS');
             assert.equal(result.manifestValidationStatus, 'PASS');
-            assert.equal(result.contractMigrationCount, 3);
-            assert.deepEqual(result.contractMigrationFiles, [
-                'garda-agent-orchestrator/live/docs/agent-rules/40-commands.md',
-                'garda-agent-orchestrator/live/docs/agent-rules/80-task-workflow.md',
-                'garda-agent-orchestrator/live/docs/agent-rules/90-skill-catalog.md'
-            ]);
+            assert.equal(result.contractMigrationCount, 0);
+            assert.deepEqual(result.contractMigrationFiles, []);
+            for (const file of ['40-commands.md', '80-task-workflow.md', '90-skill-catalog.md']) {
+                assert.ok(result.ruleRefresh.some(entry => entry.ruleFile === file && entry.backupPath), file);
+            }
 
             const commandsContent = fs.readFileSync(path.join(liveRuleDir, '40-commands.md'), 'utf8');
             const taskWorkflowContent = fs.readFileSync(path.join(liveRuleDir, '80-task-workflow.md'), 'utf8');
@@ -1622,22 +1625,7 @@ describe('runUpdate', () => {
 
             const liveRuleDir = path.join(bundleRoot, 'live', 'docs', 'agent-rules');
             fs.mkdirSync(liveRuleDir, { recursive: true });
-            fs.writeFileSync(path.join(liveRuleDir, '40-commands.md'), [
-                '# Commands',
-                '',
-                '## Agent Gates',
-                '```bash',
-                'node garda-agent-orchestrator/bin/garda.js gate classify-change --changed-file "src/example.ts"',
-                '```',
-                '',
-                '### Compile Gate (Mandatory)',
-                '```bash',
-                '.\\gradlew.bat clean testClasses --console=plain',
-                '```',
-                '',
-                'Rules:',
-                '- First non-empty non-comment line from this block is the compile gate command.'
-            ].join('\n'), 'utf8');
+            seedHistoricalCommands(repoRoot, liveRuleDir, ".\\gradlew.bat clean testClasses --console=plain");
             seedWorkflowConfigCompileGateCommand(bundleRoot, '__COMPILE_GATE_COMMAND_UNCONFIGURED__');
 
             const result = runUpdate({
@@ -1652,9 +1640,8 @@ describe('runUpdate', () => {
             assert.equal(result.installStatus, 'PASS');
             assert.equal(result.materializationStatus, 'PASS');
             assert.equal(result.contractMigrationStatus, 'PASS');
-            assert.deepEqual(result.contractMigrationFiles, [
-                'garda-agent-orchestrator/live/docs/agent-rules/40-commands.md'
-            ]);
+            assert.deepEqual(result.contractMigrationFiles, []);
+            assert.ok(result.ruleRefresh.some(entry => entry.ruleFile === '40-commands.md' && entry.backupPath));
 
             const commandsContent = fs.readFileSync(path.join(liveRuleDir, '40-commands.md'), 'utf8');
             const compileSection = extractMarkdownSection(commandsContent, '### Compile Gate (Mandatory)');
@@ -1681,22 +1668,7 @@ describe('runUpdate', () => {
 
             const liveRuleDir = path.join(bundleRoot, 'live', 'docs', 'agent-rules');
             fs.mkdirSync(liveRuleDir, { recursive: true });
-            fs.writeFileSync(path.join(liveRuleDir, '40-commands.md'), [
-                '# Commands',
-                '',
-                '## Agent Gates',
-                '```bash',
-                'node garda-agent-orchestrator/bin/garda.js gate classify-change --changed-file "src/example.ts"',
-                '```',
-                '',
-                '### Compile Gate (Mandatory)',
-                '```bash',
-                'npm run build',
-                '```',
-                '',
-                'Rules:',
-                '- First non-empty non-comment line from this block is the compile gate command.'
-            ].join('\n'), 'utf8');
+            seedHistoricalCommands(repoRoot, liveRuleDir, "npm run build");
             seedWorkflowConfigCompileGateCommand(bundleRoot, '__COMPILE_GATE_COMMAND_UNCONFIGURED__');
 
             const result = runUpdate({

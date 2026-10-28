@@ -23,6 +23,8 @@ export interface RuleSourceMapEntry {
     source: string;
     origin: string;
     destination: string;
+    backupPath?: string;
+    warning?: string;
 }
 
 export interface SourceInventoryEntry {

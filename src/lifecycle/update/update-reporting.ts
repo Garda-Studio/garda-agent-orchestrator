@@ -1,3 +1,4 @@
+import { ruleRefreshReportLines } from '../../materialization/rule-refresh-files';
 import { trackedInstalledBundleWarnings } from '../../gates/protected-control-plane/installed-bundle-guard';
 import { writeContainedFile } from '../../core/contained-filesystem';
 import { withLifecycleRuntimeMutationGenerationForPath } from '../runtime-mutation-generation';
@@ -113,6 +114,8 @@ export function buildUpdateReportLines(data: UpdateReportData): string[] {
             : 'AppliedFiles: none'
     ];
 
+    lines.push('', ...ruleRefreshReportLines(stageResult.ruleRefresh || []));
+
     if (announcements.updateMessages.length > 0) {
         lines.push('', '## UpdateMessages');
         for (const entry of announcements.updateMessages) {
@@ -210,6 +213,7 @@ export function buildUpdateResult(input: UpdateResultInput) {
         projectMemoryRefreshHandoffPrompt: stageResult.projectMemoryRefreshHandoffPrompt || null,
         projectMemoryDiagnostics: stageResult.projectMemoryDiagnostics || null,
         contractMigrationStatus: stageResult.contractMigrationStatus,
+        ruleRefresh: stageResult.ruleRefresh || [],
         contractMigrationCount: stageResult.contractMigrationCount,
         contractMigrationFiles: stageResult.contractMigrationFiles,
         verifyStatus: stageResult.verifyStatus,

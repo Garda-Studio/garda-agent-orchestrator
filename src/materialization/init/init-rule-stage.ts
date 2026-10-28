@@ -1,4 +1,7 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { GARDA_OWNED_RULE_FILES, MIXED_RULE_FILES, refreshMixedRule } from '../rule-refresh';
+import { newRuleRefreshId, writeRefreshedRule, writeRuleRefreshReport } from '../rule-refresh-files';
 import { pathExists, readTextFile } from '../../core/filesystem';
 import { ensureContainedDirectory, writeContainedFile } from '../../core/contained-filesystem';
 import {
@@ -8,8 +11,6 @@ import {
     GENERATED_RULE_FILES,
     generateProjectMemorySummary,
     isBootstrapOnlyLegacyCodeStyleRule,
-    migrateLegacyOutputCompactionGuidance,
-    migrateLegacyTaskTestSelectionGuidance,
     RULE_FILES,
     selectRuleSource
 } from '../rule-materialization';
@@ -80,6 +81,7 @@ function materializeRuleFiles(
         lang,
         brevity
     } = options;
+    const refreshId = newRuleRefreshId();
     const discoveryOverlay = buildDiscoveryOverlaySection(discovery);
     const ruleSourceMap: RuleSourceMapEntry[] = [];
     let legacyStyleGuidanceActive = false;
@@ -113,39 +115,48 @@ function materializeRuleFiles(
             }
         }
 
-        let content = readTextFile(source.path);
-        if (!content || !content.trim()) {
+        const governed = GARDA_OWNED_RULE_FILES.includes(ruleFile) || MIXED_RULE_FILES.includes(ruleFile);
+        const mixed = MIXED_RULE_FILES.includes(ruleFile);
+        if (GARDA_OWNED_RULE_FILES.includes(ruleFile) && source.origin !== 'template') {
+            throw new Error('Garda-owned rule template unavailable: ' + ruleFile);
+        }
+        let content = fs.readFileSync(source.path, 'utf8');
+        let warning: string | null = null;
+        if (mixed && source.origin !== 'template') {
+            const refreshed = refreshMixedRule(fs.readFileSync(source.path), fs.readFileSync(path.join(templateRuleRoot, ruleFile), 'utf8'), ruleFile);
+            content = refreshed.content;
+            warning = refreshed.warning;
+        }
+        if ((!content || !content.trim()) && !warning) {
             throw new Error(`Rule source is empty: ${source.path}`);
         }
 
-        // Discovery snapshots are generated sections; refresh them in preserved live rules too so an
-        // update replaces stale ones (including Garda's own repository snapshot shipped by 1.4.3).
-        if (source.origin === 'template' || /^## Project Discovery Snapshot[ \t]*$/mu.test(content)) {
+        // Existing mixed-rule snapshots are project bytes; only fresh templates receive an overlay.
+        if (source.origin === 'template' || (!mixed && /^## Project Discovery Snapshot[ \t]*$/mu.test(content))) {
             content = applyContextDefaults(content, ruleFile, discoveryOverlay);
         }
-        if (ruleFile === '80-task-workflow.md' && source.origin !== 'template') {
-            const templatePath = path.join(templateRuleRoot, ruleFile);
-            if (pathExists(templatePath)) {
-                content = migrateLegacyOutputCompactionGuidance(content, readTextFile(templatePath));
-                content = migrateLegacyTaskTestSelectionGuidance(content, readTextFile(templatePath));
-            }
+        if (!mixed || source.origin === 'template') {
+            content = applyCompileGateCommandDefaults(content, ruleFile, [compileGateCommandForGuidance]);
         }
-        content = applyCompileGateCommandDefaults(content, ruleFile, [compileGateCommandForGuidance]);
         content = applyAssistantDefaults(content, ruleFile, lang, brevity);
 
         const destPath = path.join(liveRuleRoot, ruleFile);
-        if (!dryRun) {
-            writeContainedFile(targetRoot, destPath, content);
-        }
+        const refreshEntry = governed ? writeRefreshedRule({
+            targetRoot, bundleRoot: options.bundleRoot, livePath: destPath, ruleFile,
+            content: warning ? fs.readFileSync(source.path) : content, refreshId, dryRun, warning
+        }) : {};
+        if (!governed && !dryRun) writeContainedFile(targetRoot, destPath, content);
 
         ruleSourceMap.push({
             ruleFile,
             source: path.relative(targetRoot, source.path).replace(/\\/g, '/'),
             origin: source.origin,
+            ...refreshEntry,
             destination: path.relative(targetRoot, destPath).replace(/\\/g, '/')
         });
     }
 
+    if (!dryRun) writeRuleRefreshReport(targetRoot, options.bundleRoot, refreshId, ruleSourceMap);
     return { ruleSourceMap, legacyStyleGuidanceActive };
 }
 

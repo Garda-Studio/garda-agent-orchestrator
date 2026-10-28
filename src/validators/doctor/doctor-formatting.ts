@@ -626,6 +626,7 @@ export function formatDoctorResult(result: DoctorResult): string {
     }
     else { lines.push('Doctor: FAIL'); lines.push('Resolve listed issues and rerun doctor.'); }
     lines.push(...(result.trackedBundleWarnings || []).map(warning => 'Warning: ' + warning));
+    lines.push(...(result.ruleRefreshWarnings || []).map(warning => 'Warning: ' + warning));
     return lines.join('\n');
 }
 
@@ -634,7 +635,7 @@ export function formatDoctorResult(result: DoctorResult): string {
  * On success: single summary line. On failure: full output (delegates to formatDoctorResult).
  */
 export function formatDoctorResultCompact(result: DoctorResult): string {
-    if (!result.passed || result.trackedBundleWarnings?.length) {
+    if (!result.passed || result.trackedBundleWarnings?.length || result.ruleRefreshWarnings?.length) {
         return formatDoctorResult(result);
     }
     const manifestStatus = result.manifestResult

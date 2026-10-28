@@ -1,3 +1,4 @@
+import { collectRuleRefreshWarnings } from '../materialization/rule-refresh-files';
 import { trackedInstalledBundleWarnings } from '../gates/protected-control-plane/installed-bundle-guard';
 import { TASK_QUEUE_FILENAME } from '../core/orchestration-constants';
 import * as fs from 'node:fs';
@@ -250,6 +251,7 @@ export function checkRollbackHealth(targetRoot: string): RollbackHealthEvidence 
 }
 
 export interface DoctorResult {
+    ruleRefreshWarnings?: string[];
     passed: boolean;
     targetRoot: string;
     verifyResult: ReturnType<typeof runVerify>;
@@ -381,6 +383,7 @@ export function runDoctor(options: DoctorOptions): DoctorResult {
         timelineEvidence: timelineScan.evidence,
         trackedBundleWarnings: trackedInstalledBundleWarnings(targetRoot),
         timelineWarnings: timelineScan.warnings,
+        ruleRefreshWarnings: collectRuleRefreshWarnings(bundlePath),
         lockHealth: lockHealth,
         lockCleanup: lockCleanup,
         reviewLockHealth: reviewLockHealth,

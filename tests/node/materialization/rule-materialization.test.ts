@@ -223,7 +223,7 @@ describe('selectRuleSource', () => {
         }
     });
 
-    it('prefers live for non-context, non-core rules', () => {
+    it('prefers templates for Garda-owned security rules', () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gao-rules-live-'));
         try {
             const templateRuleRoot = path.join(tmpDir, 'template');
@@ -235,7 +235,7 @@ describe('selectRuleSource', () => {
             fs.writeFileSync(path.join(liveRuleRoot, '70-security.md'), 'live');
 
             const result = selectRuleSource('70-security.md', { targetRoot, liveRuleRoot, templateRuleRoot });
-            assert.equal(result!.origin, 'live-existing');
+            assert.equal(result!.origin, 'template');
         } finally {
             fs.rmSync(tmpDir, { recursive: true, force: true });
         }

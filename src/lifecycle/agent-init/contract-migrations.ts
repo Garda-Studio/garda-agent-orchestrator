@@ -1,3 +1,5 @@
+import { newRuleRefreshId, writeRefreshedRule, writeRuleRefreshReport } from '../../materialization/rule-refresh-files';
+import { MIXED_RULE_FILES, refreshMixedRule } from '../../materialization/rule-refresh';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { UNCONFIGURED_COMPILE_GATE_COMMAND, resolveBundleName } from '../../core/constants';
@@ -247,6 +249,22 @@ function applySectionMigration(
 
     const currentContent = readTextFile(livePath);
     const templateContent = readTextFile(templatePath);
+    const ruleFile = path.basename(livePath);
+    if (MIXED_RULE_FILES.includes(ruleFile)) {
+        const refreshed = refreshMixedRule(fs.readFileSync(livePath), templateContent, ruleFile);
+        if (refreshed.warning) return false;
+        if (isCompileGateSectionMigration(migration)) {
+            const command = getPreservableCompileGateCommand(currentContent, migration, livePath);
+            if (command) syncWorkflowConfigCompileGateCommand(rootPath, command);
+        }
+        if (refreshed.content === currentContent) return false;
+        const refreshId = newRuleRefreshId();
+        const bundleRoot = path.join(rootPath, resolveBundleName());
+        const entry = writeRefreshedRule({ targetRoot: rootPath, bundleRoot, livePath, ruleFile,
+            content: refreshed.content, refreshId, dryRun: false });
+        writeRuleRefreshReport(rootPath, bundleRoot, refreshId, [entry]);
+        return true;
+    }
     let templateSection = extractSectionOrThrow(templateContent, migration.heading, templatePath);
     if (isCompileGateSectionMigration(migration)) {
         const preservedCommand = normalizePreservableCompileGateCommand(preservedCompileGateCommand, livePath)

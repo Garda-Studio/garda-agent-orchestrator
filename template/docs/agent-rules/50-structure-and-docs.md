@@ -1,7 +1,12 @@
+<!-- garda:rule-section:structure-and-documentation:start -->
 # Structure and Documentation
 
+<!-- garda:rule-section:structure-and-documentation:end -->
+<!-- garda:rule-section:preamble:start -->
 Primary entry point: selected source-of-truth entrypoint (depends on configured provider).
 
+<!-- garda:rule-section:preamble:end -->
+<!-- garda:rule-section:repository-structure:start -->
 ## Repository Structure
 ```text
 <ProjectRoot>/
@@ -59,6 +64,8 @@ Primary entry point: selected source-of-truth entrypoint (depends on configured 
     └── AGENT_INIT_PROMPT.md      # Single prompt for setup agent
 ```
 
+<!-- garda:rule-section:repository-structure:end -->
+<!-- garda:rule-section:core-documents:start -->
 ## Core Documents
 - Source-of-truth entrypoint file (selected at install): canonical routing index for agent rules.
 - `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `QWEN.md` - supported root entrypoint files; `AGENTS.md` is intentionally shared by Codex and Cursor, and only the selected source-of-truth file is canonical.
@@ -100,8 +107,11 @@ Primary entry point: selected source-of-truth entrypoint (depends on configured 
 - `garda-agent-orchestrator/live/skills/refactor-review/SKILL.md` - refactor review skill.
 - `garda-agent-orchestrator/live/skills/test-review/SKILL.md` - test review skill.
 
+<!-- garda:rule-section:core-documents:end -->
+<!-- garda:rule-section:orchestrator-git-boundary:start -->
 ## Orchestrator Git Boundary
 - In normal project deployments, local orchestration control-plane files are expected to stay gitignored.
 - This includes `TASK.md`, installer-managed provider bridge files, `garda-agent-orchestrator/runtime/**`, and internal orchestrator docs such as `garda-agent-orchestrator/live/docs/changes/CHANGELOG.md`.
 - Their absence from `git status`, staged diff, or PR scope is normal and must not be treated as a workflow failure.
 - Only stage or version `TASK.md` or provider bridge files when the user explicitly requests it. In an installed project, never stage or version paths under `garda-agent-orchestrator/`, even on request.
+<!-- garda:rule-section:orchestrator-git-boundary:end -->

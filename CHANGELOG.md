@@ -13,6 +13,8 @@
 
 ### Clearer interface and task guidance
 
+- Init, reinit and update refresh Garda-owned rules from the current templates. Mixed command, structure and operating rules retain project sections and command bytes; uncertain legacy structures remain intact with update-report and doctor warnings. Replaced live copies are saved beside update reports, and rollback restores the prior rules.
+
 - Completed closeout navigation clears obsolete review-launch suggestions from text and JSON while retaining accepted review evidence.
 
 - Deployed bundles include findings contracts, parent completion, release readiness, run methods, and their linked contributor/task-plan guides, so public documentation links resolve locally.

@@ -80,6 +80,18 @@ interface NonCanonicalMutationCapability {
 }
 
 const WRITER_COVERAGE_EDGES = Object.freeze({
+    ruleRefreshReportWrite: {
+        candidatePath: 'src/lifecycle/update/rule-refresh-report-store.ts',
+        ownerPath: 'src/lifecycle/update/rule-refresh-report-store.ts',
+        edgeSourcePath: 'src/lifecycle/update/rule-refresh-report-store.ts',
+        edgeMarker: 'withLifecycleRuntimeMutationGenerationForPath('
+    },
+    ruleRefreshMigrationDelegation: {
+        candidatePath: 'src/lifecycle/agent-init/contract-migrations.ts',
+        ownerPath: 'src/lifecycle/update/rule-refresh-report-store.ts',
+        edgeSourcePath: 'src/lifecycle/agent-init/contract-migrations.ts',
+        edgeMarker: 'writeRuleRefreshReport('
+    },
     reviewWrite: {
         candidatePath: 'src/gate-runtime/review/review-artifacts.ts',
         ownerPath: 'src/gate-runtime/review/review-artifacts.ts',
@@ -265,10 +277,6 @@ const NON_CANONICAL_MUTATION_CAPABILITIES = Object.freeze({
         sourceMarker: 'writeJsonFile(',
         boundary: 'agent-init configuration artifacts outside the six toxin roots'
     },
-    'src/lifecycle/agent-init/contract-migrations.ts': {
-        sourceMarker: 'runContractMigrations(',
-        boundary: 'live contract migration targets outside the six toxin roots'
-    },
     'src/lifecycle/check-update/check-update-source.ts': {
         sourceMarker: 'mkdtempSync(',
         boundary: 'temporary acquired update source outside the six toxin roots'
@@ -362,6 +370,7 @@ const ROOT_WRITER_COVERAGE = Object.freeze({
         'updateApply', 'commonWrite', 'cleanupDirect', 'cleanupRemoval', 'cleanupStorage', 'dailyRetentionGc'
     ],
     'update-reports': [
+        'ruleRefreshReportWrite', 'ruleRefreshMigrationDelegation',
         'updateReportWrite', 'updateReportDelegation', 'rollbackWrite',
         'cleanupDirect', 'cleanupRemoval', 'cleanupStorage', 'dailyRetentionGc'
     ],
@@ -378,8 +387,8 @@ const JOURNAL_OWNER_PATTERN = /(?:withLifecycleRuntimeMutationGeneration(?:ForPa
 // Merge 5705a5a3 retires guides through existing contained removal, rollback and lifecycle ownership.
 // Install mode/text and update reporting retain their existing writer and generation owners.
 // 2026-10-27 A+B audit: Q4 private-cache writer removed; verified index adds no writers.
-// All 114 bounded source files are byte-identical to the prior seal; retain their exact hash.
-const BOUNDED_MUTATION_SURFACE_SHA256 = 'f31e79f2c1966d6c7f4df53def162b2ed6de860daecf03f06e4b7a072c1a9c8c';
+// 2026-10-28 independent rule-refresh audit: 115 bounded files / 27 edges; new report store owns backup/report writes.
+const BOUNDED_MUTATION_SURFACE_SHA256 = '3695664c8255303447eff565405fce6c97c2e0026fd0b928439632b8135db283';
 const READ_ONLY_FS_OPERATIONS = new Set([
     'access', 'accessSync', 'close', 'closeSync', 'exists', 'existsSync',
     'fstat', 'fstatSync', 'lstat', 'lstatSync', 'open', 'opendir', 'opendirSync',

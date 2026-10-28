@@ -35,6 +35,7 @@ import {
 } from '../command-constants';
 import { buildMigrationReportLines, type ProjectMemoryMigrationResult } from '../project-memory/project-memory-migration';
 import type { ProjectMemoryBootstrapReport } from '../project-memory/project-memory-builder';
+import { ruleRefreshReportLines } from '../rule-refresh-files';
 import { RULE_FILES } from '../rule-materialization';
 import type {
     InitProjectDiscovery,
@@ -233,9 +234,10 @@ function buildInitReportLines(opts: BuildInitReportOptions): string[] {
         lines.push(`| ${item.ruleFile} | ${tick}${item.source}${tick} | ${item.origin} | ${tick}${item.destination}${tick} |`);
     }
 
+    lines.push('', ...ruleRefreshReportLines(ruleSourceMap));
     lines.push('', '## Context Fill Policy');
-    lines.push('- Project-context rules (`10/20/30/40/50/60`) prefer legacy `docs/agent-rules/*`, then existing `live` content, then template defaults.');
-    lines.push('- All other rules prefer existing `live` content, then template defaults, then legacy docs fallback.');
+    lines.push('- Project-owned rules (`10/20/30`) prefer legacy docs, then live content, then template defaults.');
+    lines.push('- Garda-owned rules (`00/35/70/80/90`) always use current templates. Mixed rules (`40/50/60`) refresh marked Garda sections and retain project bytes; unrecognized structures are preserved with warnings. Prior replaced live copies are saved under runtime/update-reports.');
     lines.push(`- Selected source-of-truth entrypoint (${tick}${trimmedSoT}${tick}) is provided by installer and points to ${tick}${resolveBundleName()}/live/docs/agent-rules/*${tick}.`);
 
     if (legacyStyleGuidanceActive) {

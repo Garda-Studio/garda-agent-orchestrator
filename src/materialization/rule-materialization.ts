@@ -14,6 +14,8 @@ import {
     sha256Hex
 } from '../core/project-memory';
 
+import { GARDA_OWNED_RULE_FILES, MIXED_RULE_FILES } from './rule-refresh';
+
 export { OPTIONAL_RULE_SUPPORT_FILES } from './rule-support-files';
 
 interface SelectRuleSourceOptions {
@@ -227,11 +229,17 @@ function resolveExistingRuleSourceCandidates(ruleFile: string, options: SelectRu
     const isContextRule = CONTEXT_RULE_FILES.includes(ruleFile);
     const candidates: RuleSourceSelection[] = [];
 
-    if (ruleFile === '00-core.md') {
+    if (GARDA_OWNED_RULE_FILES.includes(ruleFile)) {
         candidates.push(
             { path: templateCandidate, origin: 'template' },
             { path: liveCandidate, origin: 'live-existing' },
             { path: legacyCandidate, origin: 'legacy-docs' }
+        );
+    } else if (MIXED_RULE_FILES.includes(ruleFile)) {
+        candidates.push(
+            { path: liveCandidate, origin: 'live-existing' },
+            { path: legacyCandidate, origin: 'legacy-docs' },
+            { path: templateCandidate, origin: 'template' }
         );
     } else if (isContextRule) {
         candidates.push(
@@ -267,8 +275,9 @@ function resolveRuleSourceCandidates(ruleFile: string, options: SelectRuleSource
 
 /**
  * Selects the best source for a rule file following priority rules:
- * - 00-core.md: template > live > legacy
- * - Context rules (10-60): legacy > live > template
+ * - Garda-owned rules: template > live > legacy
+ * - Project rules (10/20/30): legacy > live > template
+ * - Mixed rules (40/50/60): live > legacy > template
  * - Other rules: live > template > legacy
  */
 export function selectRuleSource(ruleFile: string, options: SelectRuleSourceOptions): RuleSourceSelection | null {

@@ -203,6 +203,7 @@ export function runInit(options: RunInitOptions) {
             reviewCapabilitiesSync: reportingStage.reviewCapabilitiesSync,
             skillsIndexPath: reportingStage.skillsIndexPath,
             ruleSourceMap: ruleStage.ruleSourceMap,
+            ruleRefresh: ruleStage.ruleSourceMap.filter(entry => entry.backupPath || entry.warning),
             sourceInventoryPath: reportingStage.sourceInventoryPath,
             initReportPath: reportingStage.initReportPath,
             projectDiscoveryPath: reportingStage.projectDiscoveryPath,

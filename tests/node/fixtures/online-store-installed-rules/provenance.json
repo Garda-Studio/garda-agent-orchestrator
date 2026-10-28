@@ -1,0 +1,14 @@
+{
+  "source": "D:/Projects/OnlineStore/garda-agent-orchestrator/live/docs/agent-rules",
+  "copiedReadOnly": true,
+  "sha256": {
+    "00-core.md": "f7b60203b6c3e1c680b65ba04e8e3d56e165d2c6be28a733edbf844ce8d2f791",
+    "35-strict-coding-rules.md": "696a9fafbd352c6d71e96cd5cfbdd36e87ecc17f87be601df01ef2ef521cdf97",
+    "40-commands.md": "59280b62fc219ce2120c717a5e943453979b5b05f76688d655e0b5a3f3e90d05",
+    "50-structure-and-docs.md": "5eadb573cf6762c7c1ec786f146186b577b452c2c46cda7e85842a8fcc9f7006",
+    "60-operating-rules.md": "06b6be8611bbfbaf96c247d3deef28b9dd76df953f190a9985d25a4c7fd2b253",
+    "70-security.md": "6e6ad12246a5eeaf14d28994a234acff530d085fb90b35990cf6e295dc698966",
+    "80-task-workflow.md": "5105b771337aee9263df259314ed6f0d7c80cf53f9079bfa601c0d10611153b2",
+    "90-skill-catalog.md": "ea3ac123aaa0e3aaa09e265dbe5504eb069a93af0711282a08cb698c27fe5e27"
+  }
+}

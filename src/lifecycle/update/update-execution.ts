@@ -1,3 +1,4 @@
+import type { RuleRefreshEntry } from '../../materialization/rule-refresh-files';
 import * as path from 'node:path';
 import { resolveBundleName } from '../../core/constants';
 import { pathExists } from '../../core/filesystem';
@@ -94,6 +95,7 @@ export interface UpdatePipelineStageResult {
     projectMemoryMaintenanceSummaryLine?: string | null;
     projectMemoryRefreshHandoffPrompt?: string | null;
     projectMemoryDiagnostics?: ProjectMemoryLifecycleDiagnostics | null;
+    ruleRefresh?: RuleRefreshEntry[];
     contractMigrationStatus: string;
     contractMigrationCount: number;
     contractMigrationFiles: string[];
@@ -133,6 +135,15 @@ function getOptionalQualityChecksNotice(result: unknown): string | null {
     return typeof notice === 'string' && notice.trim()
         ? notice
         : null;
+}
+
+function getRuleRefresh(result: unknown): RuleRefreshEntry[] {
+    const entries = result && typeof result === 'object' ? (result as Record<string, unknown>).ruleRefresh : null;
+    if (!Array.isArray(entries)) return [];
+    return entries.filter((entry): entry is RuleRefreshEntry => Boolean(entry && typeof entry === 'object'
+        && typeof entry.ruleFile === 'string'
+        && (entry.backupPath === undefined || typeof entry.backupPath === 'string')
+        && (entry.warning === undefined || typeof entry.warning === 'string')));
 }
 
 function getStringArray(value: unknown): string[] {
@@ -236,6 +247,7 @@ export function executeUpdatePipelineStages(options: {
     let projectMemoryMaintenanceSummaryLine: string | null = null;
     let projectMemoryRefreshHandoffPrompt: string | null = null;
     let projectMemoryDiagnostics: ProjectMemoryLifecycleDiagnostics | null = null;
+    let ruleRefresh: RuleRefreshEntry[] = [];
     let contractMigrationStatus = 'NOT_RUN';
     let verifyStatus = 'NOT_RUN';
     let manifestStatus = 'NOT_RUN';
@@ -311,6 +323,7 @@ export function executeUpdatePipelineStages(options: {
                     preservedCompileGateCommand,
                     lifecycleLockAlreadyHeld
                 });
+                ruleRefresh = getRuleRefresh(materializationResult);
                 workflowConfigMergeStatus = getWorkflowConfigMergeStatus(materializationResult);
                 optionalQualityChecksNotice = getOptionalQualityChecksNotice(materializationResult);
                 projectMemoryDiagnostics = getProjectMemoryDiagnostics(materializationResult);
@@ -340,6 +353,7 @@ export function executeUpdatePipelineStages(options: {
                     preservedCompileGateCommand,
                     lifecycleLockAlreadyHeld
                 });
+                ruleRefresh = getRuleRefresh(initResult);
                 workflowConfigMergeStatus = getWorkflowConfigMergeStatus(initResult);
                 optionalQualityChecksNotice = getOptionalQualityChecksNotice(initResult);
                 projectMemoryDiagnostics = getProjectMemoryDiagnostics(initResult);
@@ -492,6 +506,7 @@ export function executeUpdatePipelineStages(options: {
         contractMigrationStatus,
         contractMigrationCount,
         contractMigrationFiles,
+        ruleRefresh,
         verifyStatus,
         manifestStatus,
         invariantStatus,

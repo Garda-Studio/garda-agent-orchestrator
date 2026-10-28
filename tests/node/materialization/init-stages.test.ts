@@ -305,7 +305,7 @@ describe('init materialization stages', () => {
         }
     });
 
-    it('refreshes stale discovery snapshots in preserved live command rules on update', () => {
+    it('preserves project discovery snapshots byte-for-byte in existing mixed rules on update', () => {
         const workspace = createStageWorkspace(repoRoot);
         try {
             const options = {
@@ -333,11 +333,15 @@ describe('init materialization stages', () => {
                 '### Manual Validation Evidence Selector', 'Keep this user-visible rule.', ''
             ].join('\n'), 'utf8');
 
+            const before = fs.readFileSync(commandsPath);
             runInitRuleStage(options);
 
             const refreshed = fs.readFileSync(commandsPath, 'utf8');
-            assert.equal(refreshed.match(/^## Project Discovery Snapshot/gmu)?.length, 1);
-            assert.ok(!refreshed.includes('Files considered: 515'));
+            const snapshotStart = Buffer.from('## Project Discovery Snapshot');
+            const after = fs.readFileSync(commandsPath);
+            assert.deepEqual(after.subarray(after.indexOf(snapshotStart)), before.subarray(before.indexOf(snapshotStart)));
+            assert.equal(refreshed.match(/^## Project Discovery Snapshot/gmu)?.length, 2);
+            assert.ok(refreshed.includes('Files considered: 515'));
             assert.ok(refreshed.includes('### Manual Validation Evidence Selector'));
             assert.ok(refreshed.includes('Keep this user-visible rule.'));
         } finally {

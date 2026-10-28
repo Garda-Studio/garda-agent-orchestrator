@@ -1,7 +1,10 @@
+<!-- garda:rule-section:commands:start -->
 # Commands
 
 In installed projects, never edit, stage or commit Garda's own bundle files (code, `bin/`, `dist/`, `src/`, templates, managed rules and settings), even with operator approval. Exception: when the rules require it, update `garda-agent-orchestrator/live/docs/project-memory/` and `garda-agent-orchestrator/live/docs/changes/CHANGELOG.md` on disk; never stage or commit them. Write files under `garda-agent-orchestrator/runtime/` only where a gate or next-step instructs (for example quality-checklist answers); never stage or commit them. Record Garda defects in the `TASK.md` orchestrator-problems section instead of patching Garda inside the project. Change live/config settings only through existing workflow commands.
 
+<!-- garda:rule-section:commands:end -->
+<!-- garda:rule-section:preamble:start -->
 Primary entry point: selected source-of-truth entrypoint for this workspace.
 
 IMPORTANT: Prefer orchestrator-managed validation over ad-hoc validation.
@@ -12,6 +15,8 @@ User preferences such as "do not run rebuild" or "skip tests" never waive mandat
 Canonical gate surface is `node garda-agent-orchestrator/bin/garda.js gate <name>`.
 Default task loop: run `node garda-agent-orchestrator/bin/garda.js next-step "<task-id>" --repo-root "."` before the first gate, after every suggested command, and after any gate failure. Follow its single recommended command instead of guessing from defaults, stale artifacts, or the static gate list.
 
+<!-- garda:rule-section:preamble:end -->
+<!-- garda:rule-section:ad-hoc-vs-mandatory-gate-commands:start -->
 ### Ad-Hoc vs Mandatory Gate Commands
 Ad-hoc command restraint and mandatory gate execution are separate concerns:
 - **Ad-hoc commands** (project build, test, or lint commands executed directly) - avoid as routine task validation. Use them only when requested, when doing a focused local debug pass, or when there is an explicit technical reason before returning to the gate flow.
@@ -30,6 +35,8 @@ node garda-agent-orchestrator/bin/garda.js gate compile-gate --task-id "T-042" -
 # compile-gate may run a configured project build/type-check command; that is allowed because it is gate-driven, not ad-hoc.
 ```
 
+<!-- garda:rule-section:ad-hoc-vs-mandatory-gate-commands:end -->
+<!-- garda:rule-section:auditable-intermediate-commands:start -->
 ### Auditable Intermediate Commands
 Use `gate run-intermediate-command` for focused manual validation that is
 eligible for the auditable compact wrapper. This is the preferred path before
@@ -77,6 +84,8 @@ Rules:
 - If the command is not eligible for `run-intermediate-command`, use the Manual
   Validation Logs pattern below so chat output remains bounded and auditable.
 
+<!-- garda:rule-section:auditable-intermediate-commands:end -->
+<!-- garda:rule-section:manual-validation-logs:start -->
 ### Manual Validation Logs
 Manual validation outside the gate pipeline must keep the agent transcript bounded.
 Use this pattern only for focused debug or split-repair validation before returning
@@ -126,6 +135,8 @@ Rules:
 - Do not use this pattern for mandatory lifecycle gates, which already own output
   filtering and evidence materialization.
 
+<!-- garda:rule-section:manual-validation-logs:end -->
+<!-- garda:rule-section:manual-validation-evidence-selector:start -->
 ### Manual Validation Evidence Selector
 
 The selector must contain a root `task_id` matching the current task and its
@@ -155,23 +166,35 @@ Relative log paths resolve inside the task's manual-validation directory.
 An entry may use `status` instead of `exit_code` and may set `review_types` to
 specific lanes. Keep failure diagnostics and the original outcome.
 
+<!-- garda:rule-section:manual-validation-evidence-selector:end -->
+<!-- garda:rule-section:project-commands-required:start -->
 ## Project Commands (Required)
 Replace these defaults with repository-specific commands when the real project differs.
 
+<!-- garda:rule-section:project-commands-required:end -->
+<!-- garda:rule-section:setup:start -->
 ### Setup
+<!-- garda:project-command:setup:start -->
 ```bash
 <project dependency install command, if any>
 node garda-agent-orchestrator/bin/garda.js setup --target-root "."
 ```
+<!-- garda:project-command:setup:end -->
 
+<!-- garda:rule-section:setup:end -->
+<!-- garda:rule-section:run:start -->
 ### Run
+<!-- garda:project-command:run:start -->
 ```bash
 node garda-agent-orchestrator/bin/garda.js status --target-root "."
 node garda-agent-orchestrator/bin/garda.js agent-init --target-root "." --init-answers-path "garda-agent-orchestrator/runtime/init-answers.json" --active-agent-files "AGENTS.md, CLAUDE.md, GEMINI.md, QWEN.md, .github/copilot-instructions.md, .windsurf/rules/rules.md, .junie/guidelines.md, .antigravity/rules.md" --project-rules-updated yes --skills-prompted yes
 node garda-agent-orchestrator/bin/garda.js doctor --target-root "." --init-answers-path "garda-agent-orchestrator/runtime/init-answers.json"
 node garda-agent-orchestrator/bin/garda.js --help
 ```
+<!-- garda:project-command:run:end -->
 
+<!-- garda:rule-section:run:end -->
+<!-- garda:rule-section:skill-packs:start -->
 ### Skill Packs
 ```bash
 node garda-agent-orchestrator/bin/garda.js skills list --target-root "."
@@ -180,11 +203,15 @@ node garda-agent-orchestrator/bin/garda.js skills add node-backend --target-root
 node garda-agent-orchestrator/bin/garda.js skills validate --target-root "."
 ```
 
+<!-- garda:rule-section:skill-packs:end -->
+<!-- garda:rule-section:test:start -->
 ### Test
+<!-- garda:project-command:test:start -->
 ```bash
 <project test command from garda-agent-orchestrator/live/project-discovery.md or workflow-config>
 <focused project test command>
 ```
+<!-- garda:project-command:test:end -->
 
 Rules:
 - Use the command detected in `garda-agent-orchestrator/live/project-discovery.md` or explicitly configured in `garda-agent-orchestrator/live/config/workflow-config.json`.
@@ -193,16 +220,24 @@ Rules:
 - Direct generated-artifact test consumers are producer-consumer flows: refresh the generated artifacts first with the owning producer command, then run the consumer.
 - Do not launch the producer and direct generated-artifact consumer as parallel raw shell commands; that bypasses the guarded validation-chain path.
 
+<!-- garda:rule-section:test:end -->
+<!-- garda:rule-section:quality:start -->
 ### Quality
+<!-- garda:project-command:quality:start -->
 ```bash
 <project type-check command>
 <project validation command>
 ```
+<!-- garda:project-command:quality:end -->
 
+<!-- garda:rule-section:quality:end -->
+<!-- garda:rule-section:compile-gate-mandatory:start -->
 ### Compile Gate (Mandatory)
+<!-- garda:project-command:compile-gate-mandatory:start -->
 ```bash
 __COMPILE_GATE_COMMAND_UNCONFIGURED__
 ```
+<!-- garda:project-command:compile-gate-mandatory:end -->
 
 Rules:
 - `garda-agent-orchestrator/live/config/workflow-config.json` `compile_gate.command` is the executable compile-gate command.
@@ -214,6 +249,8 @@ Rules:
 - If the repository truly has no separate compile/build/type-check command, stop for operator approval before using the compile-gate override flags.
 - This command is executed by `node garda-agent-orchestrator/bin/garda.js gate compile-gate` before review phase.
 
+<!-- garda:rule-section:compile-gate-mandatory:end -->
+<!-- garda:rule-section:optional-quality-checks:start -->
 ### Optional Quality Checks
 ```bash
 node garda-agent-orchestrator/bin/garda.js workflow set --optional-checks-enabled true --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>" --target-root "."
@@ -229,18 +266,26 @@ Rules:
 - Disabling the mode skips only `quality-checklist`; it does not replace or weaken compile-gate, full-suite validation, or independent review.
 - Rule edits must go through the audited workflow-setting path or the guarded local UI settings controls, not direct JSON edits.
 
+<!-- garda:rule-section:optional-quality-checks:end -->
+<!-- garda:rule-section:build-and-package:start -->
 ### Build and Package
+<!-- garda:project-command:build-and-package:start -->
 ```bash
 <project build command>
 <project package or release command, if any>
 ```
+<!-- garda:project-command:build-and-package:end -->
 
+<!-- garda:rule-section:build-and-package:end -->
+<!-- garda:rule-section:compact-command-policy:start -->
 ## Compact Command Policy
 
 When available and enabled, prefer `garda compact` for noisy supported Git status/scoped diff, file ranges and repository search. Use the actual local CLI prefix printed by next-step. Discover syntax via `compact --help` or `compact file|read|search --help`. Small output stays inline; explicit file ranges use a separate sequential reading budget. After localization, read a sufficient range directly instead of repeatedly searching or fetching tiny pieces. Retained reads default to 4 KiB (configurable), support `--max-bytes 8192` and retained-stream `--from-line`/`--lines`. Search accepts repeated literal `--query` values and `--context`; it searches only captured output, not necessarily the full source file. Follow `nextOffset` until `end` when complete coverage is required. Never treat omissions as absence or completed review coverage. Required rule/handoff/evidence reads remain exact and complete through their prescribed paths. Secrets are not masked. Compact is not a shell wrapper and never replaces mandatory gate commands. Already bounded native reads remain appropriate when cheaper, disabled or unsupported. Reviewers use compact only within their authorized handoff scope.
 
 Compact command usage is mandatory by default. Treat full or verbose output as an escalation step, not a starting point.
 
+<!-- garda:rule-section:compact-command-policy:end -->
+<!-- garda:rule-section:required-protocol:start -->
 ### Required Protocol
 1. First pass must use compact, summary, structured (`--json`), bounded, or path-scoped output.
 2. Escalate in this order only: `scan -> inspect -> debug`.
@@ -251,6 +296,8 @@ Compact command usage is mandatory by default. Treat full or verbose output as a
    - single-target failure debugging after localization.
 5. Before switching to verbose or full output, state briefly why compact output is insufficient.
 
+<!-- garda:rule-section:required-protocol:end -->
+<!-- garda:rule-section:mode-selection:start -->
 ### Mode Selection
 | Mode | Default output policy | Expected usage |
 |---|---|---|
@@ -259,6 +306,8 @@ Compact command usage is mandatory by default. Treat full or verbose output as a
 | `debug` | verbose/full, local target only | reproduce or explain a known failure |
 | `sensitive` | complete output, no unsafe truncation | auth, secrets, CVE, migration, infra diagnostics |
 
+<!-- garda:rule-section:mode-selection:end -->
+<!-- garda:rule-section:two-pass-rule:start -->
 ### Two-Pass Rule
 1. Start with compact scan.
 2. Narrow to targeted inspect.
@@ -269,6 +318,8 @@ Examples:
 - `rg -l --max-count=5 pattern src/` -> `rg -C2 pattern src/feature/`
 - `pytest -q --tb=short` -> `pytest tests/test_auth.py::test_refresh -vv --tb=long`
 
+<!-- garda:rule-section:two-pass-rule:end -->
+<!-- garda:rule-section:noisy-commands-require-justification:start -->
 ### Noisy Commands Require Justification
 Do not start with noisy or unbounded commands when a compact equivalent exists.
 
@@ -280,6 +331,8 @@ Examples that must not be first pass without a reason:
 - `docker logs` / `kubectl logs` without `--tail`
 - verbose test runners on the first pass
 
+<!-- garda:rule-section:noisy-commands-require-justification:end -->
+<!-- garda:rule-section:optional-command-reference-appendix:start -->
 ### Optional Command Reference Appendix
 The detailed git, package-manager, test-runner, build/lint, search, Docker, and
 Kubernetes cheat-sheet tables live in:
@@ -290,12 +343,16 @@ tools. Do not add the appendix to mandatory `TASK_ENTRY` or `POST_PREFLIGHT`
 rule-pack loads; the compact policy above and gate commands below are the
 mandatory workflow contract.
 
+<!-- garda:rule-section:optional-command-reference-appendix:end -->
+<!-- garda:rule-section:when-full-output-is-required:start -->
 ### When Full Output Is Required
 - Diagnosing a specific test failure — use verbose mode (`--tb=long`, `-v`) for that test only.
 - Debugging build/compile errors — read full compiler output, then switch back to compact.
 - Security-sensitive commands — never truncate; auth, secrets, CVE, migration outputs must stay complete.
 - First encounter with unfamiliar tool output — read full once, then adopt compact flags.
 
+<!-- garda:rule-section:when-full-output-is-required:end -->
+<!-- garda:rule-section:agent-gates:start -->
 ## Agent Gates
 Canonical gate surface is the Node CLI router.
 
@@ -376,3 +433,4 @@ Notes:
 - Human-readable timeline can be generated with `node garda-agent-orchestrator/bin/garda.js gate task-events-summary`; summary output includes `IntegrityStatus`.
 - Compact task audit summary can be generated with `node garda-agent-orchestrator/bin/garda.js gate task-audit-summary --task-id "<task-id>"`; it shows status, gates, changed files, evidence paths, blockers, and final closeout contract data. Use `--as-json` for structured output; on `PASS` it also materializes canonical `runtime/reviews/<task-id>-final-closeout.{json,md}` artifacts. Non-zero exit when status is not `PASS`.
 - Deterministic next-step guidance can be generated with `node garda-agent-orchestrator/bin/garda.js next-step "<task-id>" --repo-root "."`; it reports the next gate command, effective `full_suite_validation` config path/enabled/placement/command, review execution policy, missing artifacts, and review trust status. This is the default task loop, not only a diagnostic fallback.
+<!-- garda:rule-section:agent-gates:end -->

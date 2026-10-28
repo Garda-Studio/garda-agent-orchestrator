@@ -10,6 +10,8 @@ import {
     writeAgentInitState
 } from '../runtime/agent-init-state';
 import { getCanonicalEntrypointFile, convertActiveAgentEntrypointFilesToString } from './common';
+import { GARDA_OWNED_RULE_FILES, MIXED_RULE_FILES, refreshMixedRule } from './rule-refresh';
+import { newRuleRefreshId, writeRefreshedRule, writeRuleRefreshReport, type RuleRefreshEntry } from './rule-refresh-files';
 import { applyAssistantDefaults } from './rule-materialization';
 import { generateProjectMemorySummary } from './rule-materialization';
 import { runInstall } from './install';
@@ -173,7 +175,23 @@ export function runReinit(options: ReinitOptions) {
         ensureDirectory(path.dirname(resolvedInitPath));
         writeJsonFile(resolvedInitPath, serializedAnswers);
 
-        const coreRuleUpdated = updateCoreRuleFile(bundleRoot, sourceRoot, resolvedLanguage, resolvedBrevity);
+        const refreshId = newRuleRefreshId();
+        const ruleRefresh: RuleRefreshEntry[] = [];
+        let coreRuleUpdated = false;
+        for (const ruleFile of [...GARDA_OWNED_RULE_FILES, ...MIXED_RULE_FILES]) {
+            const templatePath = path.join(sourceRoot, 'docs/agent-rules', ruleFile);
+            const livePath = path.join(bundleRoot, 'live/docs/agent-rules', ruleFile);
+            const template = fs.readFileSync(templatePath, 'utf8');
+            const existing = pathExists(livePath) ? fs.readFileSync(livePath, 'utf8') : null;
+            const refreshed = existing !== null && MIXED_RULE_FILES.includes(ruleFile)
+                ? refreshMixedRule(fs.readFileSync(livePath), template, ruleFile) : { content: template, warning: null };
+            const content = applyAssistantDefaults(refreshed.content, ruleFile, resolvedLanguage, resolvedBrevity);
+            const entry = writeRefreshedRule({ targetRoot: normalizedTarget, bundleRoot, livePath, ruleFile,
+                content, refreshId, dryRun: false, warning: refreshed.warning });
+            ruleRefresh.push(entry);
+            if (ruleFile === '00-core.md') coreRuleUpdated = existing !== content;
+        }
+        writeRuleRefreshReport(normalizedTarget, bundleRoot, refreshId, ruleRefresh);
 
         const tokenEconomyUpdated = updateTokenEconomyConfig(bundleRoot, sourceRoot, resolvedTokenEconomyEnabled);
 
@@ -279,6 +297,7 @@ export function runReinit(options: ReinitOptions) {
             tokenEconomyEnabled: resolvedTokenEconomyEnabled,
             providerMinimalism: resolvedProviderMinimalism,
             coreRuleUpdated,
+            ruleRefresh,
             tokenEconomyConfigUpdated: tokenEconomyUpdated.updated,
             tokenEconomyConfigPath: tokenEconomyUpdated.path,
             projectMemoryBootstrapReportPath: projectMemoryBootstrapReport.path,
@@ -411,7 +430,7 @@ export function updateCoreRuleFile(bundleRoot: string, sourceRoot: string, langu
     const livePath = path.join(bundleRoot, 'live/docs/agent-rules/00-core.md');
     const templatePath = path.join(sourceRoot, 'docs/agent-rules/00-core.md');
 
-    const sourcePath = pathExists(livePath) ? livePath : pathExists(templatePath) ? templatePath : null;
+    const sourcePath = pathExists(templatePath) ? templatePath : null;
     if (!sourcePath) {
         throw new Error(`Core rule source not found. Checked: ${livePath} and ${templatePath}`);
     }
@@ -432,8 +451,10 @@ export function updateCoreRuleFile(bundleRoot: string, sourceRoot: string, langu
         return false;
     }
 
-    ensureDirectory(path.dirname(livePath));
-    fs.writeFileSync(livePath, updatedContent, 'utf8');
+    const refreshId = newRuleRefreshId();
+    const entry = writeRefreshedRule({ targetRoot: path.dirname(bundleRoot), bundleRoot, livePath,
+        ruleFile: '00-core.md', content: updatedContent, refreshId, dryRun: false });
+    writeRuleRefreshReport(path.dirname(bundleRoot), bundleRoot, refreshId, [entry]);
     return true;
 }
 
