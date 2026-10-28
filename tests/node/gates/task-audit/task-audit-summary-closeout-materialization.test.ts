@@ -169,10 +169,10 @@ describe('gates/task-audit-summary', () => {
             assert.ok(fs.readFileSync(markdownPath, 'utf8').includes('Task status sync: gate-owned for IN_PROGRESS/IN_REVIEW/SPLIT_REQUIRED/DONE'));
             assert.ok(renderedSummaryText.includes('Mandatory full-suite: false'));
             assert.ok(renderedSummaryText.includes('Task status sync: gate-owned for IN_PROGRESS/IN_REVIEW/SPLIT_REQUIRED/DONE'));
-            const disabledCommitGuidance = 'Local commit permission is disabled. Enable it through an explicitly approved audited workflow set before committing.';
-            assert.equal(result.final_closeout.commit_question, disabledCommitGuidance);
-            assert.ok(renderedMarkdown.includes(disabledCommitGuidance));
-            assert.ok(!renderedMarkdown.includes('Do you want me to commit now? (yes/no)'));
+            const confirmationQuestion = 'Do you want me to commit now? (yes/no)';
+            assert.equal(result.final_closeout.commit_question, confirmationQuestion);
+            assert.ok(renderedMarkdown.includes(confirmationQuestion));
+            assert.ok(renderedMarkdown.includes('Do you want me to commit now? (yes/no)'));
             assert.ok(renderedMarkdown.includes('Task status sync: gate-owned for IN_PROGRESS/IN_REVIEW/SPLIT_REQUIRED/DONE'));
         });
 

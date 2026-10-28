@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { bindContainedDestination, ensureContainedDirectory, writeContainedFile } from '../contained-filesystem';
+import { assertContainedDestination, assertExistingPathIdentity, bindContainedDestination, ensureContainedDirectory, writeContainedFile } from '../contained-filesystem';
 import { joinOrchestratorPath } from '../orchestrator-paths';
 import { assertWorkflowTransactionReadable } from '../workflow-transaction-state';
 import { validateWorkflowConfig } from '../../schemas/config-artifacts';
@@ -133,6 +133,54 @@ function rotatePermissionKey(context: PermissionContext): Buffer {
     return key;
 }
 
+function initializePermissionKey(context: PermissionContext): Buffer {
+    ensureContainedDirectory(context.gitDirectory, path.dirname(context.keyPath));
+    const parent = bindContainedDestination(context.gitDirectory, path.dirname(context.keyPath));
+    const destination = bindContainedDestination(context.gitDirectory, context.keyPath);
+    const candidate = randomBytes(32);
+    let descriptor: number;
+    try {
+        assertExistingPathIdentity(parent);
+        assertContainedDestination(destination);
+        descriptor = fs.openSync(context.keyPath, 'wx+', 0o600);
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        assertExistingPathIdentity(parent);
+        const existingPath = bindContainedDestination(context.gitDirectory, context.keyPath);
+        const existing = readPermissionKey(context);
+        assertContainedDestination(existingPath);
+        assertExistingPathIdentity(parent);
+        if (!existing) throw new Error('Local commit authentication key is unavailable.');
+        return existing;
+    }
+    try {
+        const identity = fs.fstatSync(descriptor, { bigint: true });
+        if (!identity.isFile() || identity.nlink !== 1n) throw new Error('Local commit authentication key must be an ordinary unlinked file.');
+        const assertIdentity = () => {
+            assertExistingPathIdentity(parent);
+            const binding = bindContainedDestination(context.gitDirectory, context.keyPath);
+            const observed = fs.lstatSync(context.keyPath, { bigint: true });
+            if (observed.dev !== identity.dev || observed.ino !== identity.ino
+                || observed.birthtimeNs !== identity.birthtimeNs || observed.mode !== identity.mode) {
+                throw new Error('Local commit authentication key changed during initialization.');
+            }
+            assertContainedDestination(binding);
+        };
+        assertIdentity();
+        const bytes = Buffer.from(candidate.toString('hex') + '\n');
+        fs.writeFileSync(descriptor, bytes);
+        fs.fsyncSync(descriptor);
+        assertIdentity();
+        const observed = Buffer.alloc(bytes.length);
+        if (fs.fstatSync(descriptor).size !== bytes.length
+            || fs.readSync(descriptor, observed, 0, observed.length, 0) !== observed.length || !observed.equals(bytes)) {
+            throw new Error('Local commit authentication key bytes changed during initialization.');
+        }
+        assertIdentity();
+        return candidate;
+    } finally { fs.closeSync(descriptor); }
+}
+
 function authenticationPayload(record: Record<string, unknown>, workspaceIdentity: string): string {
     const unsigned = { ...record };
     delete unsigned.local_commit_authentication;
@@ -140,7 +188,7 @@ function authenticationPayload(record: Record<string, unknown>, workspaceIdentit
 }
 
 export function authenticateLocalCommitWorkflowAudit<TRecord extends Record<string, unknown>>(
-    repoRoot: string, record: TRecord, rotate: boolean
+    repoRoot: string, record: TRecord, rotate: boolean, initializeIfMissing = false
 ): TRecord & { local_commit_authentication?: Record<string, string> } {
     let context: PermissionContext;
     try { context = resolvePermissionContext(repoRoot); }
@@ -150,7 +198,7 @@ export function authenticateLocalCommitWorkflowAudit<TRecord extends Record<stri
     }
     // Rotation is a revocation barrier outside copied live/runtime state. A failed
     // publication deliberately leaves old grants invalid rather than resurrecting them.
-    const key = rotate ? rotatePermissionKey(context) : readPermissionKey(context);
+    const key = rotate ? rotatePermissionKey(context) : readPermissionKey(context) ?? (initializeIfMissing ? initializePermissionKey(context) : null);
     if (!key) return record;
     return { ...record, local_commit_authentication: {
         workspace_identity_sha256: context.workspaceIdentity,

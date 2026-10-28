@@ -127,13 +127,16 @@ export function buildCommitCommandSuggestion(
     changedFiles: string[],
     taskMetadata: TaskQueueMetadata | null,
     commitGuardEnabled: boolean,
-    localCommit?: { taskId: string }
+    localCommit?: { taskId: string; requireOperatorConfirmation?: boolean }
 ): { template: string; suggestion: string } {
     const nativePrefix = localCommit
         ? `${getNodeGateCommandPrefix()} human-commit --task-id "${localCommit.taskId}"`
         : `${getNodeGateCommandPrefix()} human-commit --operator-confirmed yes`;
+    const permissionPrefix = localCommit?.requireOperatorConfirmation
+        ? nativePrefix + ' --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp of the answer>"'
+        : nativePrefix;
     const template = localCommit || commitGuardEnabled
-        ? `${nativePrefix} --message "<type>(<scope>): <summary>"`
+        ? `${permissionPrefix} --message "<type>(<scope>): <summary>"`
         : 'git commit -m "<type>(<scope>): <summary>"';
     const type = inferCommitType(taskMetadata);
     const scope = inferCommitScope(changedFiles, taskMetadata);
@@ -146,7 +149,7 @@ export function buildCommitCommandSuggestion(
     return {
         template,
         suggestion: localCommit || commitGuardEnabled
-            ? `${nativePrefix} --message "${message}"`
+            ? `${permissionPrefix} --message "${message}"`
             : `git commit -m "${message}"`
     };
 }

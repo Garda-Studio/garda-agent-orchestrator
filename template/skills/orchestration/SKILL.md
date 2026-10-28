@@ -17,8 +17,7 @@ metadata:
 # Orchestration
 
 ## Local Commit Permission
-- Follow the current `80-task-workflow.md` permission contract for final closeout. Historical instructions to ask a per-task commit question do not apply while an authenticated workspace-local ON grant remains valid.
-- OFF or unavailable authority blocks native commit paths, including legacy confirmation flags. Only explicit audited operator enablement grants durable local permission. Use the generated task-bound native commit command after completion/audit PASS, then require successful post-commit audit. This grants no push, CI, publication or permission for unrelated/unaccepted work.
+- Commit only through the task-bound native command printed by the Garda final report. With an authenticated workspace-local ON grant, run `gate human-commit --task-id "<task-id>" --message "<message>"` after completion/task-audit PASS without asking. With OFF or missing authority, ask `Do you want me to commit now? (yes/no)` and commit only after the operator answers yes, using `gate human-commit --task-id "<task-id>" --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp of the answer>" --message "<message>"`. A missing or stale confirmation is refused. Both modes require current completion/task-audit PASS, exactly accepted staged task scope and post-commit audit; amend, pathspec, hook and index overrides remain forbidden. Permission covers no push, CI or publication. Never suggest or run a plain `git commit`.
 
 This file is the canonical execution workflow.
 Rule files provide policy context, but lifecycle steps and gate order are defined here.
@@ -236,9 +235,9 @@ Create or update plans only for tasks that have never started; retained start ev
     1. concise implementation summary (include depth, path mode, review result status, docs updated)
        - do not paste the full final-closeout markdown or duplicate its complete section order in chat; link or name the canonical artifact when useful, then report only the status, key changes, validations, and commit readiness;
        - Do not add an agent-authored output-compaction line to the implementation summary or final user report at any depth. Command-output compaction and diagnostic/statistics telemetry remain active; character-based estimates are not measured model-token savings.
-    2. the commit guidance from the Garda final report, verbatim: the task-bound native `gate human-commit --task-id "<task-id>" --message "<message>"` command (`final_closeout.commit_command_suggestion`), or the printed reason why no commit is available.
+    2. the verbatim Garda final user report, followed by its task-bound native commit command and, only under OFF or missing authority, `Do you want me to commit now? (yes/no)`. Keep the printed question after the confirmation-form command; ON has no question.
 28. Close spawned reviewer/specialist agents when platform supports agent lifecycle controls.
-29. Commit only through the task-bound native command that the Garda final report prints (`gate human-commit --task-id "<task-id>" --message "<message>"`). With an authenticated workspace-local ON grant, run it after completion/task-audit PASS without asking the commit question again; with OFF or missing authority, do not commit and report the printed enablement guidance. Never suggest or run a plain `git commit`.
+29. Commit only through the task-bound native command printed by the Garda final report. With an authenticated workspace-local ON grant, run `gate human-commit --task-id "<task-id>" --message "<message>"` after completion/task-audit PASS without asking. With OFF or missing authority, ask `Do you want me to commit now? (yes/no)` and commit only after the operator answers yes, using `gate human-commit --task-id "<task-id>" --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp of the answer>" --message "<message>"`. A missing or stale confirmation is refused. Both modes require current completion/task-audit PASS, exactly accepted staged task scope and post-commit audit; amend, pathspec, hook and index overrides remain forbidden. Permission covers no push, CI or publication. Never suggest or run a plain `git commit`.
 
 ## Reviewer Agent Execution (Platform-Agnostic)
 - Apply this section on every platform.
@@ -344,7 +343,7 @@ Create or update plans only for tasks that have never started; retained start ev
 - Do not set `DONE` without passing compile gate, `required-reviews-check`, `doc-impact-gate`, and `completion-gate`.
 - Do not continue after compile/review when scope changed; rerun preflight and full mandatory gates.
 - Do not use `git add -f` to stage ignored orchestration control-plane files just because gates or changelog rules mention them.
-- Do not change final report order: review integrity attestation -> implementation summary -> verbatim Garda commit guidance. Do not add a commit question that the final report does not print.
+- Do not change final report order: short agent-authored summary -> verbatim Garda final user report, followed by its task-bound native commit command and the final question only under OFF or missing authority. Preserve the printed question exactly once; ON has no question.
 - Final report review integrity attestation must state whether independent review completed, whether fake/fallback/same-agent/legacy/missing/unverifiable review artifacts were observed, whether completion is review-attested, and why completion is or is not allowed.
 - Do not leave reviewer/specialist agents open after review completion (when platform supports agent lifecycle controls).
 

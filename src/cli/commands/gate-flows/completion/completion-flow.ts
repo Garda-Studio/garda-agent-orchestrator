@@ -72,7 +72,7 @@ export interface HumanCommitOptions {
 function parseHumanCommitInvocation(
     gitArgs: unknown,
     options: HumanCommitOptions
-): { commitArgs: string[]; cwd: string; taskId: string } {
+): { commitArgs: string[]; cwd: string; taskId: string; operatorConfirmation: { confirmed: boolean; confirmedAtUtc: string | null } | null } {
     const invocationCwd = options.cwd || process.cwd();
     let cwd = invocationCwd;
     let operatorConfirmed = false;
@@ -132,10 +132,12 @@ function parseHumanCommitInvocation(
         commitArgs.push(argument);
     }
 
-    if (operatorConfirmed || operatorConfirmedAtUtc) validateFreshOperatorConfirmation({
+    const permission = resolveLocalCommitAvailability(cwd);
+    if (!permission.enabled || operatorConfirmed || operatorConfirmedAtUtc) validateFreshOperatorConfirmation({
         actionLabel: 'human-commit',
         confirmed: operatorConfirmed,
         confirmedAtUtc: operatorConfirmedAtUtc,
+        requireConfirmedAtUtc: !permission.enabled,
         instruction: 'Ask the user "Do you want me to commit now? (yes/no)" and rerun only after a yes response with --operator-confirmed yes.'
     });
 
@@ -143,13 +145,21 @@ function parseHumanCommitInvocation(
         throw new Error('Provide git commit arguments, for example: -m "feat: message"');
     }
 
-    const permission = resolveLocalCommitAvailability(cwd);
-    if (!permission.enabled) throw new Error(`Local commit permission is disabled: ${permission.disabledReason}. ${permission.remediationCommand}`);
     if (!taskId) throw new Error('Native local commits require --task-id for completed, audited task scope.');
     const messageOnly = commitArgs.length === 2 && ['-m', '--message'].includes(commitArgs[0])
         || commitArgs.length === 1 && /^--message=.+/u.test(commitArgs[0]);
     if (!messageOnly) throw new Error('Native local commits accept only --message; amend, pathspec, hooks and index overrides are forbidden.');
-    return { commitArgs, cwd, taskId };
+    return { commitArgs, cwd, taskId, operatorConfirmation: permission.enabled ? null
+        : { confirmed: operatorConfirmed, confirmedAtUtc: operatorConfirmedAtUtc } };
+}
+
+function isNativeCommitAuthorizationCurrent(invocation: ReturnType<typeof parseHumanCommitInvocation>): boolean {
+    if (!invocation.operatorConfirmation) return resolveLocalCommitAvailability(invocation.cwd).enabled;
+    try {
+        validateFreshOperatorConfirmation({ actionLabel: 'human-commit', ...invocation.operatorConfirmation,
+            requireConfirmedAtUtc: true, instruction: 'Ask the operator for a fresh yes/no confirmation.' });
+        return true;
+    } catch { return false; }
 }
 
 interface CommandAuditPayload {
@@ -444,7 +454,10 @@ function assertNativeCommitReadiness(
     const indexBytes = fs.readFileSync(prepared.indexPath);
     if (!indexBytes.equals(fs.readFileSync(prepared.commitIndex))
         || prepared.readHead() !== prepared.head
-        || !resolveLocalCommitAvailability(invocation.cwd).enabled) throw new Error('Native commit readiness changed before Git launch.');
+        || !isNativeCommitAuthorizationCurrent(invocation)) throw new Error('Native commit readiness changed before Git launch.');
+    if (invocation.operatorConfirmation && !authenticateLocalCommitWorkflowAudit(invocation.cwd, {}, false, true).local_commit_authentication) {
+        throw new Error('Confirmed native commit requires workspace-native source authentication.');
+    }
     return { audit, indexBytes, tree: prepared.git(['write-tree'], undefined, true).trim() };
 }
 
@@ -456,7 +469,7 @@ function assertNativeCommitPublication(
     if (prepared.git(['write-tree'], undefined, true).trim() !== accepted.tree
         || !fs.readFileSync(prepared.indexPath).equals(accepted.indexBytes)
         || prepared.readHead() !== prepared.head
-        || !resolveLocalCommitAvailability(invocation.cwd).enabled) {
+        || !isNativeCommitAuthorizationCurrent(invocation)) {
         throw new Error('Native commit readiness changed after Git hooks; accepted scope must be validated again.');
     }
     const implementation = accepted.audit.final_closeout.implementation_summary;
@@ -644,7 +657,7 @@ function publishNativeSourceAcceptance(
             assertPublishedNativeCommitIdentity(prepared, accepted.tree, accepted.commit);
             const unsignedProof = { ...proof };
             delete unsignedProof.local_commit_authentication;
-            const authentication = resolveLocalCommitAvailability(root).enabled
+            const authentication = isNativeCommitAuthorizationCurrent(invocation)
                 ? authenticateLocalCommitWorkflowAudit(root, unsignedProof, false).local_commit_authentication : undefined;
             if (!authentication || authentication.workspace_identity_sha256 !== proof.local_commit_authentication?.workspace_identity_sha256
                 || authentication.hmac_sha256 !== proof.local_commit_authentication?.hmac_sha256) {

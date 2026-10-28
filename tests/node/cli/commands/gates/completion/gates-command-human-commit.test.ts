@@ -443,12 +443,11 @@ test('native task commit excludes unrelated Git entries and treats accepted file
     } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('OFF blocks native commit even with fresh legacy operator confirmation', async () => {
+test('OFF blocks native commit without explicit operator confirmation', async () => {
     const root = fixture(false);
     try {
         const head = runGit(root, ['rev-parse', 'HEAD']).stdout;
-        await assert.rejects(() => runHumanCommitCommand(['--task-id', TASK_ID, '--operator-confirmed', 'yes',
-            '--operator-confirmed-at-utc', new Date().toISOString(), '-m', 'test: forbidden'], { cwd: root }), /permission is disabled/);
+        await assert.rejects(() => runHumanCommitCommand(['--task-id', TASK_ID, '-m', 'test: forbidden'], { cwd: root }), /explicit operator confirmation/);
         assert.equal(runGit(root, ['rev-parse', 'HEAD']).stdout, head);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
@@ -813,4 +812,95 @@ test('G1 installed guards accept untracking bundle files but reject removals mix
         if (previous === undefined) delete process.env.GARDA_ALLOW_COMMIT; else process.env.GARDA_ALLOW_COMMIT = previous;
         fs.rmSync(root, { recursive: true, force: true });
     }
+});
+
+test('confirmation-boundary ON revocation cannot fall back to supplied fresh confirmation', async (t) => {
+    const root = fixture();
+    try {
+        auditFixture(t, root);
+        installHook(root, 'pre-commit', 'printf \'{"local_commit":{"enabled":false}}\\n\' > garda-agent-orchestrator/live/config/workflow-config.json');
+        const head = runGit(root, ['rev-parse', 'HEAD']).stdout;
+        await assert.rejects(runHumanCommitCommand(['--task-id', TASK_ID, '--operator-confirmed', 'yes',
+            '--operator-confirmed-at-utc', new Date().toISOString(), '--message', 'test: no fallback'], { cwd: root }), /readiness changed/u);
+        assert.equal(runGit(root, ['rev-parse', 'HEAD']).stdout, head);
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('confirmation-boundary OFF expires after hooks before commit publication', async (t) => {
+    const root = fixture(false);
+    const start = Date.now();
+    try {
+        auditFixture(t, root);
+        const marker = path.join(root, '.git/confirmation-expired');
+        installHook(root, 'pre-commit', 'printf expired > .git/confirmation-expired');
+        t.mock.method(Date, 'now', () => fs.existsSync(marker) ? start + OPERATOR_CONFIRMATION_MAX_AGE_MS + 60000 : start);
+        const head = runGit(root, ['rev-parse', 'HEAD']).stdout;
+        await assert.rejects(runHumanCommitCommand(['--task-id', TASK_ID, '--operator-confirmed', 'yes',
+            '--operator-confirmed-at-utc', new Date(start).toISOString(), '--message', 'test: expired before commit'], { cwd: root }), /readiness changed/u);
+        assert.equal(runGit(root, ['rev-parse', 'HEAD']).stdout, head);
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('confirmation-boundary OFF expiry at acceptance append preserves HEAD without accepted proof', async (t) => {
+    const root = fixture(false);
+    const start = Date.now();
+    const append = taskEventsApi.appendMandatoryTaskEvent;
+    let expired = false;
+    try {
+        auditFixture(t, root);
+        t.mock.method(Date, 'now', () => expired ? start + OPERATOR_CONFIRMATION_MAX_AGE_MS + 60000 : start);
+        t.mock.method(taskEventsApi, 'appendMandatoryTaskEvent', (...args: Parameters<typeof append>) => {
+            if (args[2] === 'TASK_SOURCE_COMMIT_ACCEPTED') expired = true;
+            return append(...args);
+        });
+        await assert.rejects(runHumanCommitCommand(['--task-id', TASK_ID, '--operator-confirmed', 'yes',
+            '--operator-confirmed-at-utc', new Date(start).toISOString(), '--message', 'test: expired acceptance'], { cwd: root }), /authority changed/u);
+        assert.match(runGit(root, ['log', '-1', '--format=%s']).stdout, /expired acceptance/u);
+        assert.deepEqual(sourceAcceptanceEvents(root), []);
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('confirmation-boundary OFF rejects a replaced private-key parent before Git publication', async (t) => {
+    const root = fixture(false);
+    const open = filesystemApi.openSync;
+    let replaced = false;
+    try {
+        auditFixture(t, root);
+        t.mock.method(filesystemApi, 'openSync', (file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+            if (!replaced && flags === 'wx+' && String(file).startsWith(path.join(root, '.git'))) {
+                replaced = true;
+                const parent = path.dirname(String(file));
+                fs.renameSync(parent, parent + '.replaced');
+                fs.mkdirSync(parent);
+            }
+            return open(file, flags, mode);
+        });
+        const head = runGit(root, ['rev-parse', 'HEAD']).stdout;
+        await assert.rejects(runHumanCommitCommand(['--task-id', TASK_ID, '--operator-confirmed', 'yes',
+            '--operator-confirmed-at-utc', new Date().toISOString(), '--message', 'test: replaced key parent'], { cwd: root }), /identity changed/u);
+        assert.equal(replaced, true);
+        assert.equal(runGit(root, ['rev-parse', 'HEAD']).stdout, head);
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('confirmation-boundary OFF reuses a stable concurrent key without overwriting it', async (t) => {
+    const root = fixture(false);
+    const open = filesystemApi.openSync;
+    let keyPath = '';
+    const expected = 'ab'.repeat(32) + '\n';
+    try {
+        auditFixture(t, root);
+        t.mock.method(filesystemApi, 'openSync', (file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+            if (!keyPath && flags === 'wx+' && String(file).startsWith(path.join(root, '.git'))) {
+                keyPath = String(file);
+                fs.writeFileSync(file, expected, { flag: 'wx', mode: 0o600 });
+            }
+            return open(file, flags, mode);
+        });
+        assert.equal(await runHumanCommitCommand(['--task-id', TASK_ID, '--operator-confirmed', 'yes',
+            '--operator-confirmed-at-utc', new Date().toISOString(), '--message', 'test: reuse concurrent key'], { cwd: root }), 0);
+        assert.ok(keyPath);
+        assert.equal(fs.readFileSync(keyPath, 'utf8'), expected);
+        assert.equal(sourceAcceptanceEvents(root).length, 1);
+    } finally { t.mock.restoreAll(); fs.rmSync(root, { recursive: true, force: true }); }
 });

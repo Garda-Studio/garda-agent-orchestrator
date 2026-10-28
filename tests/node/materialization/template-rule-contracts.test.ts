@@ -10,25 +10,43 @@ const repoRoot = findRepoRoot();
 const read = (relativePath: string) => fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
 const COMMIT_SURFACES = [
     'template/docs/agent-rules/00-core.md',
+    'template/docs/agent-rules/40-commands.md',
     'template/docs/agent-rules/80-task-workflow.md',
     'template/skills/orchestration/SKILL.md',
     'template/skills/orchestration/references/stage-gates.md'
 ];
 
 describe('shipped rule contracts', () => {
-    it('describes one native commit contract and no legacy commit question', () => {
+    it('describes both task-bound native commit permission modes', () => {
         for (const relativePath of COMMIT_SURFACES) {
             const text = read(relativePath);
-            assert.doesNotMatch(text, /Do you want me to commit now\?/u, relativePath);
-            assert.doesNotMatch(text, /Never commit unless user explicitly requests commit/u, relativePath);
-            assert.doesNotMatch(text, /`git commit -m "<type>\(<scope>\): <summary>"` suggestion/u, relativePath);
+            assert.match(text, /ON grant, run .*gate human-commit --task-id "<task-id>" --message "<message>".*after completion\/task-audit PASS without asking/u, relativePath);
+            assert.match(text, /OFF or missing authority, ask .*Do you want me to commit now\? \(yes\/no\)/u, relativePath);
+            assert.match(text, /--task-id "<task-id>" --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp of the answer>" --message/u, relativePath);
+            assert.match(text, /missing or stale confirmation is refused/u, relativePath);
+            assert.doesNotMatch(text, /never overrides OFF|confirmation flags to bypass permission|OFF or unavailable authority blocks native|With OFF or unavailable authority, explain the audited enablement/u, relativePath);
+            assert.match(text, /exactly accepted staged task scope and post-commit audit/u, relativePath);
+            assert.match(text, /Never suggest or run a plain \x60git commit\x60/u, relativePath);
         }
-        for (const relativePath of ['template/docs/agent-rules/80-task-workflow.md', 'template/skills/orchestration/SKILL.md']) {
-            const text = read(relativePath);
-            assert.match(text, /gate human-commit --task-id "<task-id>" --message "<message>"/u, relativePath);
-            assert.match(text, /ON grant, run it after completion\/task-audit PASS without asking the commit question again/u, relativePath);
-            assert.match(text, /Never suggest or run a plain `git commit`/u, relativePath);
-        }
+    });
+
+    it('keeps public CLI reference consistent with protected confirmation', () => {
+        const text = read('docs/cli-reference.md');
+        assert.match(text, /With OFF or missing authority/u);
+        assert.match(text, /--task-id "<task-id>" --operator-confirmed yes --operator-confirmed-at-utc/u);
+        assert.match(text, /missing or stale confirmation is refused/u);
+        assert.doesNotMatch(text, /blocks native commits, even with legacy confirmation|authenticated Local commit ON required/u);
+    });
+
+    it('keeps settings, help and the work example consistent with protected confirmation', () => {
+        const settings = read('src/core/workflow-settings/protected-controls.ts');
+        const help = read('src/cli/commands/cli-help-output.ts');
+        const example = read('docs/work-example.md');
+        assert.match(settings, /Require fresh operator confirmation for each native task commit/u);
+        assert.doesNotMatch(settings, /Block native local commits and revoke earlier grants/u);
+        assert.match(help, /OFF revokes durable permission and requires a fresh operator confirmation and answer timestamp/u);
+        assert.match(example, /Only under OFF or missing authority/u);
+        assert.match(example, /Authenticated ON runs this command without asking/u);
     });
 
     it('lets agents create Garda-materialized follow-up rows without asking', () => {

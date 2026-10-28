@@ -67,7 +67,8 @@ Pass criteria:
 - Required findings receipts are satisfied, no `fix_now` item remains unresolved, and every required follow-up is materialized.
 - Completion finalization reconciles the task to `DONE`.
 - Artifact contract fields are valid for path mode, findings validation, locked dispositions, lane evidence, and recovery bindings.
-- User report is delivered in mandatory order: review integrity attestation -> implementation summary -> verbatim Garda commit guidance (the task-bound native `gate human-commit` command, or the printed reason why no commit is available).
+- User report is delivered in mandatory order: short agent-authored summary -> verbatim Garda final user report, followed by the task-bound native command followed by `Do you want me to commit now? (yes/no)` only under OFF or missing authority. ON has no question.
+- Commit only through the task-bound native command printed by the Garda final report. With an authenticated workspace-local ON grant, run `gate human-commit --task-id "<task-id>" --message "<message>"` after completion/task-audit PASS without asking. With OFF or missing authority, ask `Do you want me to commit now? (yes/no)` and commit only after the operator answers yes, using `gate human-commit --task-id "<task-id>" --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp of the answer>" --message "<message>"`. A missing or stale confirmation is refused. Both modes require current completion/task-audit PASS, exactly accepted staged task scope and post-commit audit; amend, pathspec, hook and index overrides remain forbidden. Permission covers no push, CI or publication. Never suggest or run a plain `git commit`.
 
 ## Failure Policy
 - Any failed gate blocks next gates.

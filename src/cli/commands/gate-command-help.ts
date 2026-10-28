@@ -550,7 +550,7 @@ function buildLifecycleGateHelpEntries(
         },
         'human-commit': {
             ...createSingleUsageEntry(
-                'Commit completed and audited task scope under an authenticated workspace-local ON grant. Optional --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp>" never overrides OFF.',
+                'Commit completed and audited task scope. Authenticated ON needs no confirmation; OFF or missing authority requires --operator-confirmed yes and --operator-confirmed-at-utc "<ISO-8601 timestamp of the answer>" from a fresh operator yes. Both modes retain task, staged-scope and post-commit audit checks.',
                 `${cliPrefix} gate human-commit --task-id "<task-id>" --message "<commit message>" --repo-root "."`,
                 false
             )

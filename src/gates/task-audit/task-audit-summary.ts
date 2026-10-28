@@ -918,13 +918,14 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
         preflight,
         rawCommitCandidateChangedFiles
     );
+    const localCommitEnabled = resolveLocalCommitAvailability(repoRoot).enabled;
     const commitCommand = buildCommitCommandSuggestion(
         commitCandidateChangedFiles.length > 0
             ? commitCandidateChangedFiles
             : filterCommitCandidatesToTaskOwnedPreflightScope(repoRoot, preflight, changedFiles),
         taskMetadata,
         commitGuardEnabled,
-        { taskId: safeTaskId }
+        { taskId: safeTaskId, requireOperatorConfirmation: !localCommitEnabled }
     );
     const commitRequired = commitCandidateChangedFiles.length > 0;
     const commitCommandTemplate = commitRequired
@@ -934,9 +935,7 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
         ? commitCommand.suggestion
         : NO_COMMIT_REQUIRED_MESSAGE;
     const commitQuestionText = commitRequired
-        ? resolveLocalCommitAvailability(repoRoot).enabled
-            ? ''
-            : 'Local commit permission is disabled. Enable it through an explicitly approved audited workflow set before committing.'
+        ? localCommitEnabled ? '' : 'Do you want me to commit now? (yes/no)'
         : NO_COMMIT_CONFIRMATION_MESSAGE;
     
         return { commitCommandTemplate, commitCommandSuggestion, commitQuestionText };
@@ -995,10 +994,12 @@ function buildTaskAuditSummaryFromSnapshot(options: TaskAuditSummaryOptions, ins
                 : hasCompletionPass && blockers.length > 0
                     ? `Completion gate passed, but final closeout is blocked: ${blockers.map((blocker) => (countNextStepWork('visit:task-audit-summary:944'), blocker.reason)).join(' ')}`
                 : 'Completion gate has not passed cleanly yet; do not deliver the task-complete final report contract.',
-        required_order: [
+        get required_order() { return [
             'short agent-authored summary of what changed',
-            'verbatim Garda final user report'
-        ],
+            'verbatim Garda final user report',
+            ...(getCommitPresentation().commitQuestionText === 'Do you want me to commit now? (yes/no)'
+                ? ['Do you want me to commit now? (yes/no)'] : [])
+        ]; },
         implementation_summary_requirements: implementationSummaryRequirements,
         get commit_command_template() { return getCommitPresentation().commitCommandTemplate; },
         get commit_command_suggestion() { return getCommitPresentation().commitCommandSuggestion; },

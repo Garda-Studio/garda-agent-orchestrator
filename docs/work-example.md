@@ -142,13 +142,16 @@ must rerun `next-step`, run the printed `task-audit-summary` command, rerun
 
 Final report order:
 
-1. Review integrity attestation.
-2. Implementation summary, including path mode, review verdicts, docs status,
-   and project-memory status.
-3. Suggested conventional commit command, or "No commit required" when there
-   are no committable changes.
-4. Explicit `Do you want me to commit now? (yes/no)` question when a commit is
-   available.
+1. Short agent-authored summary, including path mode, review verdicts, docs
+   status and project-memory status.
+2. Verbatim Garda final user report, including its review integrity attestation.
+3. Exactly one task-bound native command after completion/task-audit PASS: ON
+   uses `gate human-commit --task-id "<task-id>" --message "<message>"`; OFF
+   uses `gate human-commit --task-id "<task-id>" --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp of the answer>" --message "<message>"`.
+   Print "No commit required" when there are no committable changes.
+4. Only under OFF or missing authority, ask
+   `Do you want me to commit now? (yes/no)` after that command. Commit only
+   after a fresh yes. Authenticated ON runs this command without asking.
 
 ## Adding Specialist Skills
 

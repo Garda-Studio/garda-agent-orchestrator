@@ -105,13 +105,17 @@ export function buildFinalReportOrder(summary: TaskAuditSummaryResult): string[]
     const reportOrder = contractOrder
         .map((entry) => entry === 'implementation summary' ? 'short agent-authored summary of what changed' : entry)
         .filter((entry) => !isFinalReportCommitCommandSuggestion(entry))
-        .filter((entry) => entry !== 'Do you want me to commit now? (yes/no)' && entry !== 'No commit confirmation required.')
+        .filter((entry) => entry !== 'No commit confirmation required.')
+        .filter((entry) => entry !== 'Do you want me to commit now? (yes/no)' || entry === summary.final_report_contract.commit_question)
         .filter((entry) => String(entry || '').trim().length > 0);
     if (
         isFinalReportCommitCommandSuggestion(summary.final_report_contract.commit_command_suggestion || '')
     ) {
-        reportOrder.push(summary.final_report_contract.commit_command_suggestion);
-        if (summary.final_report_contract.commit_question) reportOrder.push(summary.final_report_contract.commit_question);
+        const question = summary.final_report_contract.commit_question;
+        const questionIndex = question ? reportOrder.indexOf(question) : -1;
+        if (questionIndex >= 0) reportOrder.splice(questionIndex, 0, summary.final_report_contract.commit_command_suggestion);
+        else reportOrder.push(summary.final_report_contract.commit_command_suggestion);
+        if (question && questionIndex < 0) reportOrder.push(question);
     }
     return reportOrder;
 }

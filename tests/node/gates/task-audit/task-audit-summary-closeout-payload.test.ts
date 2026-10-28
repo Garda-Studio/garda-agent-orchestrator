@@ -482,7 +482,7 @@ describe('gates/task-audit-summary', () => {
                 reviewsRoot: reviewsDir
             });
 
-            assert.equal(result.final_report_contract.commit_command_suggestion, 'node garda-agent-orchestrator/bin/garda.js gate human-commit --task-id "T-AUDIT-1" --message "fix(orchestration): review context canonicalization"');
+            assert.equal(result.final_report_contract.commit_command_suggestion, 'node garda-agent-orchestrator/bin/garda.js gate human-commit --task-id "T-AUDIT-1" --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp of the answer>" --message "fix(orchestration): review context canonicalization"');
         });
 
         it('keeps scope inference deterministic when changed_files order differs', () => {
@@ -528,7 +528,7 @@ describe('gates/task-audit-summary', () => {
             });
 
             assert.equal(first.final_report_contract.commit_command_suggestion, second.final_report_contract.commit_command_suggestion);
-            assert.equal(first.final_report_contract.commit_command_suggestion, 'node garda-agent-orchestrator/bin/garda.js gate human-commit --task-id "T-AUDIT-1" --message "fix(materialization): deterministic commit scope"');
+            assert.equal(first.final_report_contract.commit_command_suggestion, 'node garda-agent-orchestrator/bin/garda.js gate human-commit --task-id "T-AUDIT-1" --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp of the answer>" --message "fix(materialization): deterministic commit scope"');
         });
 
         it('falls back to the conventional commit template when task metadata is unavailable', () => {
@@ -554,11 +554,12 @@ describe('gates/task-audit-summary', () => {
                 reviewsRoot: reviewsDir
             });
 
-            assert.equal(result.final_report_contract.commit_command_template, 'node garda-agent-orchestrator/bin/garda.js gate human-commit --task-id "T-AUDIT-1" --message "<type>(<scope>): <summary>"');
-            assert.equal(result.final_report_contract.commit_command_suggestion, 'node garda-agent-orchestrator/bin/garda.js gate human-commit --task-id "T-AUDIT-1" --message "<type>(<scope>): <summary>"');
+            assert.equal(result.final_report_contract.commit_command_template, 'node garda-agent-orchestrator/bin/garda.js gate human-commit --task-id "T-AUDIT-1" --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp of the answer>" --message "<type>(<scope>): <summary>"');
+            assert.equal(result.final_report_contract.commit_command_suggestion, 'node garda-agent-orchestrator/bin/garda.js gate human-commit --task-id "T-AUDIT-1" --operator-confirmed yes --operator-confirmed-at-utc "<ISO-8601 timestamp of the answer>" --message "<type>(<scope>): <summary>"');
             assert.deepEqual(result.final_report_contract.required_order, [
                 'short agent-authored summary of what changed',
-                'verbatim Garda final user report'
+                'verbatim Garda final user report',
+                'Do you want me to commit now? (yes/no)'
             ]);
         });
 

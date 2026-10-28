@@ -41,10 +41,10 @@ const definitions: readonly ProtectedControlDefinition[] = [
     {
         id: 'local-commit-enabled', section: 'local_commit', field: 'enabled', value_type: 'boolean',
         flag: '--local-commit-enabled', label: 'Local commit permission',
-        description: 'An explicit audited ON grants this workspace durable permission to commit completed and audited task scope. OFF revokes it. Reviews, tests and post-commit audit remain required; no push or CI permission is granted.',
+        description: 'An explicit audited ON grants this workspace durable permission to commit completed and audited task scope. OFF revokes durable permission and requires fresh operator confirmation for each native task commit. Reviews, tests and post-commit audit remain required; no push or CI permission is granted.',
         options: booleanOptions(
             'Allow native commits of completed and audited task scope in this workspace.',
-            'Block native local commits and revoke earlier grants.'
+            'Require fresh operator confirmation for each native task commit and revoke durable grants.'
         )
     },
     {

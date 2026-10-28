@@ -42,7 +42,7 @@ import {
     seedSourceCheckoutRuntime
 } from './next-step-completion-fixtures';
 
-const disabledLocalCommitNotice = 'Local commit permission is disabled. Enable it through an explicitly approved audited workflow set before committing.';
+const protectedLocalCommitQuestion = 'Do you want me to commit now? (yes/no)';
 
 function bindProtectedDirtyBaseline(
     preflightPath: string,
@@ -336,7 +336,7 @@ describe('gates/next-step', () => {
 
         assert.ok(text.includes(`3. ${result.final_report?.commit_command_suggestion}`));
 
-        assert.ok(text.includes(`4. ${disabledLocalCommitNotice}`));
+        assert.ok(text.includes(`4. ${protectedLocalCommitQuestion}`));
 
         assert.ok(text.includes('Commands:'));
 
@@ -1071,7 +1071,7 @@ describe('gates/next-step', () => {
 
         assert.equal(result.final_report?.required_order[2], result.final_report?.commit_command_suggestion);
 
-        assert.equal(result.final_report?.required_order[3], disabledLocalCommitNotice);
+        assert.equal(result.final_report?.required_order[3], protectedLocalCommitQuestion);
 
         assert.match(result.final_report?.commit_command_suggestion || '', /^node .+ gate human-commit /u);
 
@@ -1093,7 +1093,7 @@ describe('gates/next-step', () => {
 
         assert.ok(text.includes(`3. ${result.final_report?.commit_command_suggestion}`));
 
-        assert.ok(text.includes(`4. ${disabledLocalCommitNotice}`));
+        assert.ok(text.includes(`4. ${protectedLocalCommitQuestion}`));
 
         assert.ok(text.includes('Commands:'));
 
