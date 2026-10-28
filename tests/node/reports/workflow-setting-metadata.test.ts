@@ -157,7 +157,22 @@ test('typed full-suite projection preserves the entire existing report contract 
     const existingDefinitions = WORKFLOW_SETTING_DEFINITIONS.filter(
         entry => entry.id !== 'task-test-selection-require-operator-confirmation' && entry.id !== 'parent-audit-enabled'
     );
-    const digest = createHash('sha256').update(JSON.stringify(canonical(existingDefinitions))).digest('hex');
+    // OP-031 deliberately changed only these two presentation strings. Keep the
+    // independent pre-migration digest for every other field and definition.
+    const localCommit = existingDefinitions.find(entry => entry.id === 'local-commit-enabled');
+    assert.ok(localCommit);
+    assert.equal(localCommit.description, 'An explicit audited ON grants this workspace durable permission to commit completed and audited task scope. OFF revokes durable permission and requires fresh operator confirmation for each native task commit. Reviews, tests and post-commit audit remain required; no push or CI permission is granted.');
+    const protectedOption = localCommit.options.find(option => option.value === 'false');
+    assert.ok(protectedOption);
+    assert.equal(protectedOption.description, 'Require fresh operator confirmation for each native task commit and revoke durable grants.');
+    const baselineDefinitions = existingDefinitions.map(entry => entry.id !== localCommit.id ? entry : {
+        ...entry,
+        description: 'An explicit audited ON grants this workspace durable permission to commit completed and audited task scope. OFF revokes it. Reviews, tests and post-commit audit remain required; no push or CI permission is granted.',
+        options: entry.options.map(option => option.value !== 'false' ? option : {
+            ...option, description: 'Block native local commits and revoke earlier grants.'
+        })
+    });
+    const digest = createHash('sha256').update(JSON.stringify(canonical(baselineDefinitions))).digest('hex');
     assert.equal(existingDefinitions.length, 61);
     assert.equal(WORKFLOW_SETTING_DEFINITIONS.length, 63);
     assert.equal(digest, '5b5a817e07d37c55b65bcbd419cab2852ac33e604dbeeb39394bcef6681db370');

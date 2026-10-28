@@ -14,7 +14,9 @@ import type { FailedReviewRemediationRouteOptions } from '../../../../src/gates/
 const HEADING = '### Manual Validation Evidence Selector';
 
 function selectorSection(content: string): string {
-    const section = content.replace(/\r\n/gu, '\n').split(`${HEADING}\n`)[1];
+    const normalized = content.replace(/\r\n/gu, '\n')
+        .replace(/^<!-- garda:rule-section:[a-z0-9-]+:(?:start|end) -->\n?/gmu, '');
+    const section = normalized.split(HEADING + '\n')[1];
     assert.ok(section, 'Published selector instructions must exist');
     return section.split(/\n#{1,3} /u)[0].trim();
 }
@@ -49,15 +51,16 @@ test('published selector repairs missing managed guidance, preserves project tex
     fs.mkdirSync(path.dirname(templatePath), { recursive: true });
     fs.mkdirSync(path.dirname(livePath), { recursive: true });
     fs.writeFileSync(templatePath, fixture.canonical);
-    const oldRules = fixture.canonical.replace(/### Manual Validation Evidence Selector\n[\s\S]*?(?=\n## Project Commands)/u, '');
-    fs.writeFileSync(livePath, oldRules + '\n## Project-owned instructions\nKeep the private project command.\n');
+    const oldRules = fixture.canonical.replace(/^<!-- garda:rule-section:manual-validation-evidence-selector:start -->\r?\n[\s\S]*?^<!-- garda:rule-section:manual-validation-evidence-selector:end -->\r?\n/mu, '');
+    const projectNotes = '\n## Project-owned instructions\nKeep the private project command.\n';
+    fs.writeFileSync(livePath, oldRules + projectNotes);
     assert.ok(!fs.readFileSync(livePath, 'utf8').includes(HEADING));
 
     const migrated = runContractMigrations({ rootPath: fixture.repoRoot });
     assert.ok(migrated.appliedFiles.includes('garda-agent-orchestrator/live/docs/agent-rules/40-commands.md'));
     const current = fs.readFileSync(livePath, 'utf8');
     assert.equal(selectorSection(current), selectorSection(fixture.canonical));
-    assert.match(current, /Keep the private project command\./u);
+    assert.ok(current.includes(projectNotes));
     assert.equal(runContractMigrations({ rootPath: fixture.repoRoot }).appliedCount, 0);
     const evidence = buildManualValidationEvidence({ repoRoot: fixture.repoRoot, taskId: fixture.taskId, reviewType: 'test' });
     assert.equal(evidence?.selected_log_count, 1);

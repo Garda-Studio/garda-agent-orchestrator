@@ -49,14 +49,16 @@ test('current index uses native rebuilt membership without a full review-directo
             .readJsonSnapshot(value.filePath, value.fileName, value.digest);
         assert.equal(expected.valid, true);
         const original = nativeFs.readdirSync;
+        // Node 22 lazy rimraf can retain this wrapper beyond the observed read.
+        let observeDirectoryReads = true;
         nativeFs.readdirSync = ((target: fs.PathLike, ...args: unknown[]) => {
-            assert.notEqual(path.resolve(String(target)), path.resolve(value.reviewsRoot), 'No full review-directory scan is allowed.');
+            if (observeDirectoryReads) assert.notEqual(path.resolve(String(target)), path.resolve(value.reviewsRoot), 'No full review-directory scan is allowed.');
             return Reflect.apply(original, nativeFs, [target, ...args]);
         }) as typeof fs.readdirSync;
         try {
             assert.deepEqual(withInvocationReadObservation(() => createCurrentReviewAttemptArtifactIndex(value.reviewsRoot, value.taskId)!
                 .readJsonSnapshot(value.filePath, value.fileName, value.digest)), expected);
-        } finally { nativeFs.readdirSync = original; }
+        } finally { observeDirectoryReads = false; nativeFs.readdirSync = original; }
     } finally { fs.rmSync(value.root, { recursive: true, force: true }); }
 });
 

@@ -43,7 +43,7 @@ for (const platform of ['linux', 'darwin']) {
                 handleSet({ targetRoot: root, gardaSelfGuard: 'off', json: true, operatorConfirmed: 'yes',
                     operatorConfirmedAtUtc: new Date().toISOString() });
                 const bundleFile = 'GARDA-AGENT-ORCHESTRATOR/src/core/formatter.ts';
-                fs.renameSync(path.join(root, 'garda-agent-orchestrator'), path.join(root, 'GARDA-AGENT-ORCHESTRATOR'));
+                // Keep canonical identity/config valid; vary only the attempted bundle scope.
                 fs.mkdirSync(path.dirname(path.join(root, bundleFile)), { recursive: true });
                 fs.writeFileSync(path.join(root, bundleFile), 'patched');
                 const nativeGuard = bundleGuard.assertNoInstalledBundleScope;
@@ -129,6 +129,7 @@ test('G1 task-maintained document exemption keeps exact POSIX case below the bun
 test('G1 ownership rule constant matches every shipped rule template copy', () => {
     for (const name of ['00-core.md', '40-commands.md', '80-task-workflow.md']) {
         const template = fs.readFileSync(path.join(findRepoRoot(), 'template/docs/agent-rules', name), 'utf8');
-        assert.equal(template.split(/\r?\n/u)[2], INSTALLED_BUNDLE_OWNERSHIP_RULE, name);
+        assert.deepEqual(template.split(/\r?\n/u).filter(line => line.startsWith('In installed projects,')),
+            [INSTALLED_BUNDLE_OWNERSHIP_RULE], name);
     }
 });

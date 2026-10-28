@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { createBundleSourceFixture } from '../../bundle-source-fixtures';
+import { findRepoRoot } from '../../materialization/install-workspace-builder';
 
 import {
     SETUP_DEFINITIONS,
@@ -482,22 +483,12 @@ test('handleSetup preserves project-specific compile gate command during contrac
             );
         });
 
-        fs.writeFileSync(commandsPath, [
-            '# Commands',
-            '',
-            '## Agent Gates',
-            '```bash',
-            'node garda-agent-orchestrator/bin/garda.js gate classify-change --changed-file "src/example.ts"',
-            '```',
-            '',
-            '### Compile Gate (Mandatory)',
-            '```bash',
-            '.\\gradlew.bat clean testClasses --console=plain',
-            '```',
-            '',
-            'Rules:',
-            '- First non-empty non-comment line from this block is the compile gate command.'
-        ].join('\n'), 'utf8');
+        const historicalCommands = fs.readFileSync(path.join(findRepoRoot(),
+            'tests/node/fixtures/online-store-installed-rules/40-commands.md'), 'utf8');
+        fs.writeFileSync(commandsPath, historicalCommands.replace(
+            /(^### Compile Gate \(Mandatory\)\r?\n\x60\x60\x60bash\r?\n)[\s\S]*?(\r?\n\x60\x60\x60)/mu,
+            (_raw: string, head: string, tail: string) => head + '.\\gradlew.bat clean testClasses --console=plain' + tail
+        ), 'utf8');
 
         await captureConsoleLogs(async () => {
             await handleSetup(

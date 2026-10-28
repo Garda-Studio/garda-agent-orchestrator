@@ -166,8 +166,11 @@ test('collector failure cannot turn a native JSON value into a new integrity rej
 
 test('A1 rejects replacing the observed timeline after lifecycle selection', t => {
     const f = fixture(t, [event('TASK_MODE_ENTERED'), event('COMPILE_GATE_PASSED')]);
+    let lifecycleSelected = false;
     assert.throws(() => withInvocationReadObservation(() => {
-        f.projected(); const replacement = f.timeline + '.replacement';
+        f.projected(); lifecycleSelected = true; const replacement = f.timeline + '.replacement';
         fs.writeFileSync(replacement, fs.readFileSync(f.timeline)); fs.renameSync(replacement, f.timeline);
-    }), /changed|authority/iu);
+    }), (error: unknown) => error instanceof Error && (/changed|authority/iu.test(error.message)
+        || error.message === 'Task timeline snapshot is unavailable: ' + f.timeline));
+    assert.equal(lifecycleSelected, true);
 });

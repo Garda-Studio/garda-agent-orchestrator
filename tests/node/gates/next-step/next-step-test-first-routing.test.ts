@@ -149,7 +149,12 @@ function buildRecipeFixture(mode = 'failed', testPath = 'specifications/case', o
         fs.writeFileSync(path.join(bundle, 'bin/garda.js'), 'console.log("1.4.4 fixture");');
         fs.writeFileSync(path.join(bundle, 'VERSION'), '1.4.4\n');
         config.optional_quality_checks.enabled = false;
-        config.compile_gate.command = `"${process.execPath}" --check src/app.ts`;
+        // Pin a real syntax-check runner before task entry; Node 22.13 cannot check .ts directly.
+        const compileScript = path.join(repoRoot, 'scripts/check-fixture-syntax.cjs');
+        fs.mkdirSync(path.dirname(compileScript), { recursive: true });
+        fs.writeFileSync(compileScript,
+            "const fs = require('node:fs'); const { Script } = require('node:vm');\nnew Script(fs.readFileSync('src/app.ts', 'utf8'), { filename: 'src/app.ts' });\n");
+        config.compile_gate.command = `"${process.execPath}" scripts/check-fixture-syntax.cjs`;
         config.full_suite_validation.enabled = true;
         config.full_suite_validation.placement = 'after_compile_before_reviews';
         config.full_suite_validation.command = options.opaqueRecipe

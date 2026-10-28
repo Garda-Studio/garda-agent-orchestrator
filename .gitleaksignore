@@ -1,0 +1,26 @@
+# Reviewed historical false positives only; no path-wide or rule-wide exclusions.
+# Fingerprints bind the immutable commit, exact file, rule and line.
+# 17 SHA256 entries in package/source/compiled-module provenance maps:
+3aae7e2715fc411320ea63bc3be46ac115d19ada:config/release-package-surface-baseline.json:generic-api-key:658
+643fb9c9e5fd11852c4ce8aa0144d00f365667d4:config/release-package-surface-baseline.json:generic-api-key:1211
+643fb9c9e5fd11852c4ce8aa0144d00f365667d4:config/release-package-surface-baseline.json:generic-api-key:1235
+643fb9c9e5fd11852c4ce8aa0144d00f365667d4:config/release-package-surface-baseline.json:generic-api-key:368
+643fb9c9e5fd11852c4ce8aa0144d00f365667d4:config/release-package-surface-baseline.json:generic-api-key:376
+643fb9c9e5fd11852c4ce8aa0144d00f365667d4:config/release-package-surface-baseline.json:generic-api-key:439
+643fb9c9e5fd11852c4ce8aa0144d00f365667d4:config/release-package-surface-baseline.json:generic-api-key:618
+643fb9c9e5fd11852c4ce8aa0144d00f365667d4:config/release-package-surface-baseline.json:generic-api-key:742
+720962eb2ee6d9ae0c1ad0d86b3afd20453995a9:docs/task-resume-context-baseline.json:generic-api-key:24
+720962eb2ee6d9ae0c1ad0d86b3afd20453995a9:docs/task-resume-context-baseline.json:generic-api-key:502
+86100f11d4fb44d6d69e8fb86d2ffd785612a109:config/release-package-surface-baseline.json:generic-api-key:632
+b85add4ebf0d51d5dce8bf63244607b6fe5f3ad9:config/release-package-surface-baseline.json:generic-api-key:1352
+b85add4ebf0d51d5dce8bf63244607b6fe5f3ad9:config/release-package-surface-baseline.json:generic-api-key:418
+b85add4ebf0d51d5dce8bf63244607b6fe5f3ad9:config/release-package-surface-baseline.json:generic-api-key:722
+e9a4ba0166f63541000fbf8ca6c4b2e1477918b7:config/release-package-surface-baseline.json:generic-api-key:1446
+e9a4ba0166f63541000fbf8ca6c4b2e1477918b7:config/release-package-surface-baseline.json:generic-api-key:451
+e9a4ba0166f63541000fbf8ca6c4b2e1477918b7:config/release-package-surface-baseline.json:generic-api-key:734
+
+# Three isolated test vectors: invalid fixture PEM, offline reviewer identity,
+# and the sequential synthetic AWS-id literal used by the redaction test.
+0a0c3896a3ea6dc0574d5c9a12daddd8050ddfe0:tests/node/gates/review/review-output-correction.test.ts:generic-api-key:571
+bc60c5ba6a1fc4a6c07ebe5212cc1e11307982c3:tests/node/gates/split-required/split-required-wip-runtime-handoff.test.ts:private-key:1578
+bd3de18d85f8be596d5986a1595afa3ba1f705c6:tests/node/gates/review-context/build-review-context-routing.test.ts:generic-api-key:627
