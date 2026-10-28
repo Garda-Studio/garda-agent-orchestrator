@@ -682,7 +682,7 @@ describe('runInit', () => {
             assert.ok(discovery.includes(`\`${expectedCommand}\``));
             assert.match(
                 commands,
-                new RegExp(`### Compile Gate \\(Mandatory\\)\\r?\\n\`\`\`bash\\r?\\n${expectedCommand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\r?\\n\`\`\``)
+                new RegExp(`### Compile Gate \\(Mandatory\\)\\r?\\n<!-- garda:project-command:compile-gate-mandatory:start -->\\r?\\n\`\`\`bash\\r?\\n${expectedCommand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\r?\\n\`\`\``)
             );
             assert.ok(workflowShow.output.includes(`CompileGateCommand: ${expectedCommand}`));
             assert.ok(!commands.includes('build.sh -f'));
@@ -739,20 +739,7 @@ describe('runInit', () => {
                     command: configuredCommand
                 }
             }, null, 2), 'utf8');
-            fs.mkdirSync(path.join(bundleRoot, 'live', 'docs', 'agent-rules'), { recursive: true });
-            fs.writeFileSync(
-                path.join(bundleRoot, 'live', 'docs', 'agent-rules', '40-commands.md'),
-                [
-                    '# Commands',
-                    '',
-                    '### Compile Gate (Mandatory)',
-                    '```bash',
-                    UNCONFIGURED_COMPILE_GATE_COMMAND,
-                    '```',
-                    ''
-                ].join('\n'),
-                'utf8'
-            );
+
 
             runInit({
                 targetRoot: projectRoot,
@@ -773,7 +760,7 @@ describe('runInit', () => {
             assert.equal(workflowConfig.compile_gate.command, configuredCommand);
             assert.match(
                 commands,
-                /### Compile Gate \(Mandatory\)\r?\n```bash\r?\ntsc --noEmit\r?\n```/
+                /### Compile Gate \(Mandatory\)\r?\n<!-- garda:project-command:compile-gate-mandatory:start -->\r?\n```bash\r?\ntsc --noEmit\r?\n```/
             );
         } finally {
             fs.rmSync(projectRoot, { recursive: true, force: true });

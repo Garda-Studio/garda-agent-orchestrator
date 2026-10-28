@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { runInit } from '../../../src/materialization/init';
+import { getTaskModeRuleSectionMigrations } from '../../../src/materialization/rule-contracts';
+import { runVerify } from '../../../src/validators/verify';
 import { NOT_EVERY_REQUEST_IS_A_TASK_RULE } from '../../../src/core/onboarding-contract';
-import { findRepoRoot } from './install-workspace-builder';
+import { findRepoRoot, setupTestWorkspace, writeInitAnswers } from './install-workspace-builder';
 
 const repoRoot = findRepoRoot();
 const read = (relativePath: string) => fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
@@ -68,5 +71,49 @@ describe('shipped rule contracts', () => {
             assert.ok(text.includes('garda-agent-orchestrator/runtime/reviews/<task-id>-task-plan.json'), relativePath);
             assert.match(text, /`required_reviews`/u, relativePath);
         }
+    });
+});
+
+describe('materialized rule verifier compatibility', () => {
+    it('ships every snippet consumed by the native rule contract verifier', () => {
+        for (const migration of getTaskModeRuleSectionMigrations()) {
+            const relativePath = 'template/' + migration.templateRelativePath.split('/template/')[1];
+            const content = read(relativePath);
+            for (const snippet of migration.requiredSnippets) {
+                assert.ok(content.includes(snippet), relativePath + ': ' + snippet);
+            }
+        }
+    });
+
+    it('passes native rule checks after real init and rejects incompatible shipped report wording', (t) => {
+        const w = setupTestWorkspace(repoRoot);
+        t.after(() => fs.rmSync(w.projectRoot, { recursive: true, force: true }));
+        const answersPath = writeInitAnswers(w.bundleRoot, {
+            AssistantLanguage: 'English', AssistantBrevity: 'concise', SourceOfTruth: 'Codex',
+            EnforceNoAutoCommit: 'false', ClaudeOrchestratorFullAccess: 'false', TokenEconomyEnabled: 'true',
+            CollectedVia: 'CLI_NONINTERACTIVE'
+        });
+        fs.writeFileSync(path.join(w.projectRoot, 'package.json'), JSON.stringify({
+            name: 'installed-rule-contract-fixture', private: true, scripts: { build: 'node -e "process.exit(0)"' }
+        }));
+        runInit({ targetRoot: w.projectRoot, bundleRoot: w.bundleRoot, sourceOfTruth: 'Codex',
+            assistantLanguage: 'English', assistantBrevity: 'concise', enforceNoAutoCommit: false });
+        const options = { targetRoot: w.projectRoot, sourceOfTruth: 'Codex', initAnswersPath: answersPath };
+        const accepted = runVerify(options);
+        assert.deepEqual(accepted.violations.commandsContractViolations, []);
+        assert.deepEqual(accepted.violations.coreRuleContractViolations, []);
+        assert.deepEqual(accepted.violations.ruleFileViolations, []);
+        // Reproduce a release where template and live agree but both violate the verifier.
+        for (const area of ['template', 'live']) {
+            const file = path.join(w.bundleRoot, area, 'docs/agent-rules/80-task-workflow.md');
+            const current = fs.readFileSync(file, 'utf8');
+            assert.ok(current.includes('summary of what changed -> verbatim Garda final user report'));
+            fs.writeFileSync(file, current.replace('summary of what changed -> verbatim Garda final user report',
+                'summary -> verbatim Garda final user report'));
+        }
+        const rejected = runVerify(options);
+        assert.equal(rejected.passed, false);
+        assert.ok(rejected.violations.ruleFileViolations.some(entry =>
+            entry.includes('80-task-workflow.md') && entry.includes('Final user report order is mandatory')));
     });
 });
