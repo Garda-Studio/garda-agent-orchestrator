@@ -2,8 +2,6 @@
 
 ## 1.4.4
 
-- Completed-task recovery shares repeated Git and evidence reads within checked phases, and revalidates owners, dependencies and retained payload bytes before removal.
-
 ### More languages and build tools
 
 - Garda works with a wider range of languages and build tools. Project discovery, file classification and validation no longer depend on Node.js conventions. Unsupported toolchains receive clear setup guidance. CMake projects get suggested build and `ctest` commands.

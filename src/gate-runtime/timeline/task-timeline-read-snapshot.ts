@@ -1,4 +1,4 @@
-import { registerInvocationDependency, isInvocationReadObservationActive, createInvocationReadMemoKey, memoizeInvocationRead, requiresInvocationContentByteValidation } from '../../core/invocation-read-observation';
+import { registerInvocationDependency, isInvocationReadObservationActive, createInvocationReadMemoKey, memoizeInvocationRead } from '../../core/invocation-read-observation';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import { createHash, type Hash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -699,12 +699,6 @@ function getCachedRead(snapshot: ActiveTaskTimelineReadSnapshot): CachedTaskTime
         registerInvocationDependency(snapshot, () => {
             if (!snapshot.cachedRead) throw new Error(`Task timeline snapshot is unavailable: ${snapshot.timelinePath}`);
             revalidateCachedRead(snapshot, snapshot.cachedRead);
-            if (requiresInvocationContentByteValidation() && snapshot.cachedRead.state === 'valid') {
-                const current = captureTaskTimelineRead(snapshot);
-                if (current.state !== 'valid' || current.sha256 !== snapshot.cachedRead.sha256) {
-                    invalidateCachedRead(snapshot.cachedRead);
-                }
-            }
             if (snapshot.cachedRead.state === 'invalid') {
                 throw new Error(`Task timeline snapshot is unavailable: ${snapshot.timelinePath}`);
             }

@@ -14,13 +14,6 @@ const CONFIG_READ_ACTIONS = new Set(['--get', '--get-all', '--get-regexp', '--ge
 const CONFIG_READ_FLAGS = new Set(['--null', '-z', '--name-only', '--show-origin', '--show-scope', '--includes',
     '--no-includes', '--local', '--global', '--system', '--worktree', '--fixed-value']);
 let installed = false;
-let nativeGitReadDepth = 0;
-
-/** A fixed native validator must not consume the memo it is validating. Synchronous only. */
-export function withNativeInvocationGitRead<T>(callback: () => T): T {
-    nativeGitReadDepth += 1;
-    try { return callback(); } finally { nativeGitReadDepth -= 1; }
-}
 
 function readonlyConfigQuery(args: string[]): boolean {
     let actions = 0;
@@ -153,7 +146,7 @@ export function withInvocationGitReadObservation<T>(callback: () => T): T {
         for (const name of ['execFileSync', 'spawnSync']) {
             const original = native[name]; originals.set(name, original);
             native[name] = function (this: unknown, ...args: unknown[]): unknown {
-                if (nativeGitReadDepth || !isInvocationReadObservationActive()) return Reflect.apply(original, this, args);
+                if (!isInvocationReadObservationActive()) return Reflect.apply(original, this, args);
                 const input = describeProcessInputs({ name, args, cwd: process.cwd(), environment: process.env });
                 if (input.opaque || !readonlyGitCommand(args)) return Reflect.apply(original, this, args);
                 const self = this;

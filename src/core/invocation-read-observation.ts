@@ -14,7 +14,6 @@ type InvocationReadMemoEntry = ({ readonly value: unknown } | { readonly error: 
 interface InvocationReadObservation {
     readonly dependencies: Map<object, () => void>;
     readonly memoized: Map<symbol, Map<string, InvocationReadMemoEntry>>;
-    readonly verifyContentBytes: boolean;
     failure: { error: unknown } | null;
     validating: boolean;
     closed: boolean;
@@ -97,11 +96,6 @@ export function isInvocationReadObservationActive(): boolean {
     return activeObservation() !== undefined;
 }
 
-/** Action read phases require fresh byte hashes before their result can escape. */
-export function requiresInvocationContentByteValidation(): boolean {
-    return activeObservation()?.verifyContentBytes === true;
-}
-
 /** Check inside snapshot lifetimes and immediately before effects as well as at invocation exit. */
 export function assertInvocationDependenciesCurrent(): void {
     const observation = activeObservation();
@@ -111,19 +105,8 @@ export function assertInvocationDependenciesCurrent(): void {
 /** Nested calls share dependencies until the outer synchronous result or native Promise settles. */
 export function withInvocationReadObservation<T>(callback: () => T): T {
     if (activeObservation()) return callback();
-    return runInvocationReadObservation(callback, false);
-}
-
-/** Use only around a synchronous, read-only action phase; never span an effect. */
-export function withStrictInvocationReadObservation<T>(callback: () => T): T {
-    if (activeObservation()) return callback();
-    return runInvocationReadObservation(callback, true);
-}
-
-function runInvocationReadObservation<T>(callback: () => T, verifyContentBytes: boolean): T {
     const observation: InvocationReadObservation = {
-        dependencies: new Map(), memoized: new Map(), verifyContentBytes,
-        failure: null, validating: false, closed: false
+        dependencies: new Map(), memoized: new Map(), failure: null, validating: false, closed: false
     };
     return invocationReadObservations.run(observation, () => {
         try {

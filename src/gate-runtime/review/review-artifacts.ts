@@ -1,4 +1,4 @@
-import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead, registerInvocationDependency, requiresInvocationContentByteValidation } from '../../core/invocation-read-observation';
+import { createInvocationReadMemoKey, isInvocationReadObservationActive, memoizeInvocationRead, registerInvocationDependency } from '../../core/invocation-read-observation';
 import { countNextStepWork } from '../../core/next-step-measurement';
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -1023,16 +1023,6 @@ function retainInvocationReviewArtifactRead(
         }
         changed ||= normalizeReviewArtifactReadSnapshotKey(resolveReviewArtifactCanonicalCandidatePath(observation.filePath))
             !== observation.canonicalPath;
-        if (!changed && requiresInvocationContentByteValidation() && observation.initiallyValid && observation.exists) {
-            try {
-                const identity = lstatFileIdentitySync(observation.filePath);
-                const bytes = readReviewArtifactBytesBounded(observation.filePath, identity);
-                const current = lstatFileIdentitySync(observation.filePath);
-                changed ||= !observation.identity || !sameReviewArtifactFileIdentity(observation.identity, identity)
-                    || !sameReviewArtifactFileIdentity(identity, current) || !bytes
-                    || createHash('sha256').update(bytes).digest('hex') !== observation.cached.sha256;
-            } catch { changed = true; }
-        }
         if (changed) {
             observation.invalidated = true;
             throw new Error('Review artifact read snapshot was invalidated by a changed input: ' + observation.filePath);

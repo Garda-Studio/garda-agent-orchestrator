@@ -3,8 +3,6 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { resolveBundleName } from '../../core/constants';
 import { fileSha256 } from '../../core/file-hashing';
-import { isInvocationReadObservationActive, withStrictInvocationReadObservation } from '../../core/invocation-read-observation';
-import { withInvocationGitReadObservation } from '../../core/invocation-git-observation';
 import { runGit, runGitBinary } from '../../core/git-helpers';
 import { TASK_QUEUE_FILENAME } from '../../core/orchestration-constants';
 import { assertCanonicalTaskId } from '../../core/task-ids';
@@ -13,7 +11,7 @@ import { parseTaskQueueEntriesFromContent, withTaskQueueReadSnapshot, type TaskQ
 import { readTaskQueueStatusToken } from '../../core/active-task-state';
 import { readTaskTimelineJsonlEntries } from '../../gate-runtime/task-events';
 import { resolveTaskHistoryLedgerPath } from '../../gate-runtime/task-history-ledger';
-import { buildTaskAuditVerification, type TaskAuditVerificationResult } from '../../gates/task-audit/task-audit-summary';
+import { buildTaskAuditSummary, type TaskAuditSummaryResult } from '../../gates/task-audit/task-audit-summary';
 import {
     isLocalControlPlaneCommitPath, readPostDoneAuditedScopeFingerprint, resolveCommittableChangedFiles
 } from '../../gates/task-audit/task-audit-summary-drift';
@@ -62,7 +60,7 @@ interface CompletedEvidenceBatch {
     workspace: WorkspaceSnapshotRequest;
     headSha: string | null;
     hashes: Map<string, string>;
-    scopes: Array<{ audit: TaskAuditVerificationResult; scope: Record<string, unknown> }>;
+    scopes: Array<{ audit: TaskAuditSummaryResult; scope: Record<string, unknown> }>;
 }
 
 interface CompletedEvidenceReadSnapshot {
@@ -98,26 +96,20 @@ function assertCompletedEvidenceReadCurrent(snapshot: CompletedEvidenceReadSnaps
 export function withCompletedTaskEvidenceReadSnapshot<T>(repoRoot: string, read: () => T): T {
     const resolvedRoot = path.resolve(repoRoot), root = canonicalPath(fs.realpathSync.native(resolvedRoot));
     if (activeCompletedEvidenceReadSnapshot?.repoRoot === root) return read();
-    const readPhase = () => {
-        const previous = activeCompletedEvidenceReadSnapshot;
-        const snapshot: CompletedEvidenceReadSnapshot = { repoRoot: root, entries: new Map() };
-        let result: T;
-        try {
-            activeCompletedEvidenceReadSnapshot = snapshot;
-            result = read();
-            if (result && typeof (result as { then?: unknown }).then === 'function') {
-                throw new Error('Completed evidence read snapshots require a synchronous read.');
-            }
-        } finally {
-            activeCompletedEvidenceReadSnapshot = previous;
+    const previous = activeCompletedEvidenceReadSnapshot;
+    const snapshot: CompletedEvidenceReadSnapshot = { repoRoot: root, entries: new Map() };
+    let result: T;
+    try {
+        activeCompletedEvidenceReadSnapshot = snapshot;
+        result = read();
+        if (result && typeof (result as { then?: unknown }).then === 'function') {
+            throw new Error('Completed evidence read snapshots require a synchronous read.');
         }
-        assertCompletedEvidenceReadCurrent(snapshot, resolvedRoot);
-        return result;
-    };
-    // An existing outer observation keeps its original contract. A standalone
-    // recovery phase owns a fresh byte-checked observation and closes it before effects.
-    return isInvocationReadObservationActive() ? readPhase()
-        : withInvocationGitReadObservation(() => withStrictInvocationReadObservation(readPhase));
+    } finally {
+        activeCompletedEvidenceReadSnapshot = previous;
+    }
+    assertCompletedEvidenceReadCurrent(snapshot, resolvedRoot);
+    return result;
 }
 
 function canonicalPath(value: string): string {
@@ -194,7 +186,7 @@ function verifyCompactLedger(
     repoRoot: string,
     bundleRoot: string,
     taskId: string,
-    audit: TaskAuditVerificationResult,
+    audit: TaskAuditSummaryResult,
     closeoutHash: string
 ): Map<string, string> {
     const ledgerPath = resolveTaskHistoryLedgerPath(bundleRoot, taskId);
@@ -250,7 +242,7 @@ function verifyCompactLedger(
     return hashes;
 }
 
-function verifyMaterializedCloseout(repoRoot: string, taskId: string, audit: TaskAuditVerificationResult) {
+function verifyMaterializedCloseout(repoRoot: string, taskId: string, audit: TaskAuditSummaryResult) {
     const snapshot = readCompactJson(repoRoot, audit.final_closeout.artifact_paths.json);
     const closeout = snapshot.value;
     if (closeout.schema_version !== 1 || closeout.event_source !== 'task-audit-summary' || closeout.task_id !== taskId
@@ -265,7 +257,7 @@ function verifyMaterializedCloseout(repoRoot: string, taskId: string, audit: Tas
     return { scope: scope as Record<string, unknown>, hash: snapshot.hash };
 }
 
-function verifyAcceptedTaskScope(repoRoot: string, audit: TaskAuditVerificationResult, scope: Record<string, unknown>) {
+function verifyAcceptedTaskScope(repoRoot: string, audit: TaskAuditSummaryResult, scope: Record<string, unknown>) {
     if (audit.changed_files.length > MAX_COMMITTED_SCOPE_FILES) throw new Error('Accepted task scope exceeds its verification budget.');
     for (const file of audit.changed_files) {
         const sourcePath = path.join(repoRoot, file);
@@ -297,8 +289,8 @@ function readTerminalQueueSnapshot(repoRoot: string): TerminalQueueSnapshot {
     return { path: queuePath, hash, entries: parseTaskQueueEntriesFromContent(contents), duplicateIds };
 }
 
-function readAcceptedAudit(repoRoot: string, taskId: string, batch: CompletedEvidenceBatch): TaskAuditVerificationResult {
-    const audit = buildTaskAuditVerification({
+function readAcceptedAudit(repoRoot: string, taskId: string, batch: CompletedEvidenceBatch): TaskAuditSummaryResult {
+    const audit = buildTaskAuditSummary({
         repoRoot, taskId, taskQueueEntries: batch.queue.entries, workspaceSnapshotRequest: batch.workspace
     });
     if (audit.status !== 'PASS' || audit.integrity_status !== 'PASS'
@@ -348,7 +340,7 @@ function verifyCommittedBlobBatch(repoRoot: string, requests: readonly Committed
     if (offset !== output.length) throw new Error('Git returned unexpected trailing committed blob evidence.');
 }
 
-function verifyCommittedTaskFiles(repoRoot: string, head: string, audit: TaskAuditVerificationResult, hashes: Map<string, string>): void {
+function verifyCommittedTaskFiles(repoRoot: string, head: string, audit: TaskAuditSummaryResult, hashes: Map<string, string>): void {
     const files = audit.changed_files.filter(file => !isLocalControlPlaneCommitPath(file));
     if (files.length > MAX_COMMITTED_SCOPE_FILES) throw new Error('Committed task scope exceeds its verification budget.');
     if (files.length === 0) return;
@@ -377,7 +369,7 @@ function verifyCommittedTaskFiles(repoRoot: string, head: string, audit: TaskAud
     if (batch.length > 0) verifyCommittedBlobBatch(repoRoot, batch);
 }
 
-function readCommittedTaskHead(repoRoot: string, audit: TaskAuditVerificationResult, hashes: Map<string, string>, batch: CompletedEvidenceBatch): string {
+function readCommittedTaskHead(repoRoot: string, audit: TaskAuditSummaryResult, hashes: Map<string, string>, batch: CompletedEvidenceBatch): string {
     const changedFiles = resolveCommittableChangedFiles(repoRoot, batch.workspace);
     if (changedFiles === null || changedFiles.some(file => audit.changed_files.includes(file))) {
         throw new Error('Accepted task scope has not been committed unchanged.');

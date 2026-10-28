@@ -1,18 +1,17 @@
 import * as path from 'node:path';
-import { assertContainedDestination, bindContainedDestination, readBoundedContainedDirectory, type ContainedDestination } from '../../core/contained-filesystem';
+import { assertContainedDestination, bindContainedDestination, type ContainedDestination } from '../../core/contained-filesystem';
 import { lstatFileIdentitySync } from '../../core/file-stat';
 import { assertDisposableAuthorityCurrent, assertDisposableInventoryCurrent, type DisposableInventoryEntry }
     from './owned-disposable-artifact-inventory';
 import type { OwnedDisposableArtifactJournalSelection } from './owned-disposable-artifact-journal';
 import { OWNED_DISPOSABLE_PREVIEW_LIMITS as LIMITS } from './owned-disposable-artifact-preview-contracts';
-import { assertOwnedDisposableRecoveryOwnerCurrent, readOwnedDisposableArtifactRecoveryAuthority, type OwnedDisposableRecoveryAuthority }
+import { readOwnedDisposableArtifactRecoveryAuthority, type OwnedDisposableRecoveryAuthority }
     from './owned-disposable-artifact-recovery-authority';
 import { OWNED_DISPOSABLE_PROGRESS_ORDER, OWNED_DISPOSABLE_RECOVERY_MAX_ATTEMPTS }
     from './owned-disposable-artifact-recovery-progress';
 import { readOwnedDisposableArtifactRecoverySnapshot, type OwnedDisposableRecoverySnapshot }
     from './owned-disposable-artifact-recovery-snapshot';
 import { readScratchFile, scratchStatIdentity, type ScratchFileSnapshot } from './scratch-writer-ownership';
-import { withCompletedTaskEvidenceReadSnapshot } from './completed-task-evidence';
 
 export interface OwnedDisposableRecoveryMutation {
     readonly snapshot: OwnedDisposableRecoverySnapshot;
@@ -62,8 +61,10 @@ function assertMetadata(previous: OwnedDisposableRecoverySnapshot, current: Owne
     }
 }
 
-function assertSnapshotBindingsCurrent(proof: OwnedDisposableRecoverySnapshot, parent: Parent | null): void {
+function assertPublicationProof(selection: OwnedDisposableArtifactJournalSelection, proof: OwnedDisposableRecoverySnapshot,
+    parent: Parent | null): void {
     const root = proof.progress.authority.selection.targetRoot;
+    assertAuthority(proof.progress.authority, readOwnedDisposableArtifactRecoveryAuthority(selection));
     for (const [index, snapshot] of proof.roots.entries()) {
         for (const binding of snapshot.absent) assertContainedDestination(binding);
         if (snapshot.entries.length) assertDisposableInventoryCurrent(bindContainedDestination(root,
@@ -83,50 +84,6 @@ function assertSnapshotBindingsCurrent(proof: OwnedDisposableRecoverySnapshot, p
         }
     }
     assertDisposableAuthorityCurrent(proof.dependencies);
-}
-
-function assertPublicationProof(selection: OwnedDisposableArtifactJournalSelection, proof: OwnedDisposableRecoverySnapshot,
-    parent: Parent | null): void {
-    const root = proof.progress.authority.selection.targetRoot;
-    const authority = withCompletedTaskEvidenceReadSnapshot(root,
-        () => readOwnedDisposableArtifactRecoveryAuthority(selection));
-    assertAuthority(proof.progress.authority, authority);
-    assertSnapshotBindingsCurrent(proof, parent);
-    // The final completed-evidence validation runs after the authority reader's
-    // owner pass; check the owner again before the caller can publish metadata.
-    assertOwnedDisposableRecoveryOwnerCurrent(selection, authority);
-}
-
-function assertProgressMembershipCurrent(proof: OwnedDisposableRecoverySnapshot): void {
-    const progress = proof.progress, directory = progress.directory;
-    const current = bindContainedDestination(directory.root, directory.path);
-    if (progress.directoryIdentity === null) {
-        if (current.missingAt !== directory.path || progress.frames.length !== 0) {
-            throw new Error('Disposable recovery progress directory appeared before removal.');
-        }
-        assertContainedDestination(current);
-        return;
-    }
-    assertContainedDestination(directory);
-    if (current.missingAt !== null) throw new Error('Disposable recovery progress directory disappeared before removal.');
-    const before = scratchStatIdentity(lstatFileIdentitySync(directory.path, { bigint: true }));
-    if (before !== progress.directoryIdentity) throw new Error('Disposable recovery progress directory changed before removal.');
-    const names = readBoundedContainedDirectory(directory, progress.frames.length);
-    if (names.length !== progress.frames.length
-        || names.some((name, index) => name !== path.basename(progress.frames[index].binding.path))
-        || scratchStatIdentity(lstatFileIdentitySync(directory.path, { bigint: true })) !== before) {
-        throw new Error('Disposable recovery progress membership changed before removal.');
-    }
-}
-
-function assertRetainedPayloadBytesCurrent(proof: OwnedDisposableRecoverySnapshot): void {
-    for (const root of proof.roots) for (const entry of root.entries) {
-        if (entry.view.directory) continue;
-        const current = readScratchFile(entry.binding, entry.view.bytes);
-        if (current.identity !== entry.view.identity || current.bytes !== entry.view.bytes || current.sha256 !== entry.view.sha256) {
-            throw new Error('Disposable recovery retained payload bytes changed before removal.');
-        }
-    }
 }
 
 function parentSnapshot(root: string, member: string): Parent {
@@ -150,7 +107,7 @@ export function createOwnedDisposableRecoveryMutation(selection: OwnedDisposable
         assertMetadata(current, proof); checkLocks(); freezeOwnedDisposableValue(proof);
         return proof;
     }
-    function prepareAppend(event: Event, member: string | null = null, error: string | null = null) {
+    function append(event: Event, member: string | null = null, error: string | null = null): void {
         const proof = inspect(), progress = proof.progress, view = progress.order[progress.retired_member_count];
         const removed = event === 'REMOVED', reconciled = event === 'RECONCILED';
         if (settled || event === 'RESUMED' && progress.resume_attempt_count >= OWNED_DISPOSABLE_RECOVERY_MAX_ATTEMPTS) {
@@ -170,56 +127,32 @@ export function createOwnedDisposableRecoveryMutation(selection: OwnedDisposable
             reconciled_file_count: progress.reconciled_file_count + Number(reconciled && !view.directory),
             reconciled_bytes: progress.reconciled_bytes + (reconciled ? view.bytes : 0) };
         const remainingBytes = LIMITS.metadataBytes - progress.frames.reduce((sum, frame) => sum + frame.bytes, 0);
-        return { record, proof, parent, remainingBytes };
-    }
-    function publishPrepared(prepared: ReturnType<typeof prepareAppend>): void {
-        const { record, proof, parent, remainingBytes } = prepared;
         const frame = publish(record, proof, () => {
             checkLocks(); assertPublicationProof(selection, proof, parent); checkLocks();
         }, remainingBytes);
         const after = readOwnedDisposableArtifactRecoverySnapshot(selection);
         assertMetadata(proof, after, frame); checkLocks(); freezeOwnedDisposableValue(after); current = after;
     }
-    function append(event: Event, member: string | null = null, error: string | null = null): void {
-        publishPrepared(prepareAppend(event, member, error));
-    }
     if (!settled) append('RESUMED', current.progress.pending_member_path);
     return Object.freeze({ snapshot: initial, journalPath: initial.progress.authority.journal.binding.path,
         journalSha256: initial.progress.authority.journal.sha256, progressDirectory: initial.progress.directory.path,
-        inspect, check: () => {
-            const proof = inspect();
-            // The final completed-evidence audit runs after the snapshot's checks.
-            // Revalidate retained payload/dependency bytes and the signed owner before unlink.
-            assertSnapshotBindingsCurrent(proof, null);
-            assertRetainedPayloadBytesCurrent(proof);
-            assertProgressMembershipCurrent(proof);
-            assertOwnedDisposableRecoveryOwnerCurrent(selection, proof.progress.authority);
-            checkLocks();
-        },
+        inspect, check: () => { inspect(); },
         pending: () => {
             if (issued || settled && current.progress.status !== 'FINISHED') throw new Error('Disposable recovery has unresolved or settled current mutation.');
-            const plan = withCompletedTaskEvidenceReadSnapshot(selection.targetRoot, () => {
-                const proof = inspect(), member = proof.progress.order[proof.progress.retired_member_count];
-                if (!member) return null;
-                if (proof.pending_absent_path !== null) throw new Error('Disposable recovery signed pending absence requires explicit reconciliation, never current removal accounting.');
-                const entry = proof.roots.flatMap(root => root.entries).find(candidate => candidate.view.path === member.path);
-                if (!entry) throw new Error('Disposable recovery current member has no exact retained native entry.');
-                return { entry, append: proof.progress.pending_member_path === null ? prepareAppend('PENDING', member.path) : null };
-            });
-            if (!plan) return null;
-            // Publication and all its live checks run after the read-only scope closes.
-            if (plan.append) publishPrepared(plan.append);
+            const proof = inspect(), member = proof.progress.order[proof.progress.retired_member_count];
+            if (!member) return null;
+            if (proof.pending_absent_path !== null) throw new Error('Disposable recovery signed pending absence requires explicit reconciliation, never current removal accounting.');
+            const entry = proof.roots.flatMap(root => root.entries).find(candidate => candidate.view.path === member.path);
+            if (!entry) throw new Error('Disposable recovery current member has no exact retained native entry.');
+            if (proof.progress.pending_member_path === null) append('PENDING', member.path);
             if (inspect().pending_absent_path !== null) throw new Error('Disposable recovery pending member disappeared before current mutation authorization.');
-            freezeOwnedDisposableValue(plan.entry); issued = plan.entry; return plan.entry;
+            freezeOwnedDisposableValue(entry); issued = entry; return entry;
         },
         removed: () => {
-            const plan = withCompletedTaskEvidenceReadSnapshot(selection.targetRoot, () => {
-                const proof = inspect();
-                if (!issued || settled || proof.progress.pending_member_path !== issued.view.path
-                    || proof.pending_absent_path !== issued.view.path) throw new Error('Disposable recovery current removal lacks its issued member and exact pending absence.');
-                return prepareAppend('REMOVED', issued.view.path);
-            });
-            publishPrepared(plan); issued = null;
+            const proof = inspect();
+            if (!issued || settled || proof.progress.pending_member_path !== issued.view.path
+                || proof.pending_absent_path !== issued.view.path) throw new Error('Disposable recovery current removal lacks its issued member and exact pending absence.');
+            append('REMOVED', issued.view.path); issued = null;
         },
         reconcilePending: () => {
             const proof = inspect();
@@ -231,15 +164,12 @@ export function createOwnedDisposableRecoveryMutation(selection: OwnedDisposable
             append('RECONCILED', proof.pending_absent_path);
         },
         finish: () => {
-            const plan = withCompletedTaskEvidenceReadSnapshot(selection.targetRoot, () => {
-                const proof = inspect();
-                if (proof.progress.status === 'FINISHED') return null;
-                if (issued || proof.progress.pending_member_path !== null || proof.progress.retired_member_count !== proof.progress.order.length) {
-                    throw new Error('Disposable recovery cannot finish with unresolved or remaining members.');
-                }
-                return prepareAppend('FINISHED');
-            });
-            if (plan) { publishPrepared(plan); settled = true; }
+            const proof = inspect();
+            if (proof.progress.status === 'FINISHED') return;
+            if (issued || proof.progress.pending_member_path !== null || proof.progress.retired_member_count !== proof.progress.order.length) {
+                throw new Error('Disposable recovery cannot finish with unresolved or remaining members.');
+            }
+            append('FINISHED'); settled = true;
         },
         fail: (message: string) => {
             const proof = inspect();

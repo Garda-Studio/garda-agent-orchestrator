@@ -115,11 +115,7 @@ function readTaskModeDirtyWorkspaceBaselineChangedFiles(taskMode: Record<string,
         .filter(Boolean));
 }
 
-type WorkflowConfigAuditInput = Pick<BuildFinalCloseoutArtifactInput,
-    'repoRoot' | 'taskId' | 'taskMode' | 'workspaceSnapshotRequest'>;
-
-/** Keep authenticated workflow migration reads shared by full and verification audits. */
-function readWorkflowConfigAuditEvidence(input: WorkflowConfigAuditInput) {
+function buildWorkflowConfigAuditSummary(input: BuildFinalCloseoutArtifactInput): FinalCloseoutWorkflowConfigAuditSummary {
     const workflowConfigBaseline = normalizeWorkflowConfigFileHashes(input.taskMode?.workflow_config_file_hashes);
     const changes = getCurrentWorkflowConfigChanges(input.repoRoot, workflowConfigBaseline, {
         allowProtectedManifestFallback: false,
@@ -132,15 +128,6 @@ function readWorkflowConfigAuditEvidence(input: WorkflowConfigAuditInput) {
         baselineFileHashes: changes.baseline_file_hashes,
         taskId: input.taskId
     });
-    return { changes, provenance };
-}
-
-export function verifyWorkflowConfigAudit(input: WorkflowConfigAuditInput): void {
-    readWorkflowConfigAuditEvidence(input);
-}
-
-function buildWorkflowConfigAuditSummary(input: BuildFinalCloseoutArtifactInput): FinalCloseoutWorkflowConfigAuditSummary {
-    const { changes, provenance } = readWorkflowConfigAuditEvidence(input);
     const status = changes.changed_files.length === 0
         ? 'none'
         : provenance.accepted
@@ -430,60 +417,7 @@ function readAuditedCloseoutScopeSnapshot(
     }
 }
 
-export type FinalCloseoutVerification = Pick<FinalCloseoutArtifact, 'status' | 'cycle_binding' | 'artifact_paths'>;
-
-type FinalCloseoutVerificationInput = Pick<BuildFinalCloseoutArtifactInput,
-    'repoRoot' | 'eventsRoot' | 'taskId' | 'currentCycle' | 'preflight' | 'finalReportContract'
-    | 'finalCloseoutJsonPath' | 'finalCloseoutMarkdownPath' | 'finalUserReportPath'>;
-
-/** The same freshly verified cycle/header for full reports and native completion proofs. */
-export function buildFinalCloseoutVerification(input: FinalCloseoutVerificationInput): FinalCloseoutVerification {
-    const noOpEvidence = !input.currentCycle
-        && input.preflight
-        && isFullSuiteNotRequiredForZeroDiffNoReviewableScope(input.preflight)
-        ? getNoOpEvidence(
-            input.repoRoot,
-            input.taskId,
-            path.join(path.dirname(input.finalCloseoutJsonPath), `${input.taskId}-no-op.json`),
-            path.join(path.dirname(input.finalCloseoutJsonPath), `${input.taskId}-preflight.json`)
-        )
-        : null;
-    const noOpEventSha256 = noOpEvidence
-        ? getCurrentNoOpEventSha256(input.repoRoot, input.taskId, noOpEvidence, input.eventsRoot)
-        : null;
-    const noOpBinding = noOpEvidence?.evidence_status === 'PASS'
-        && noOpEvidence.evidence_hash
-        && noOpEvidence.preflight_path
-        && noOpEvidence.preflight_sha256
-        && noOpEventSha256
-        ? {
-            preflight_path: noOpEvidence.preflight_path,
-            preflight_sha256: noOpEvidence.preflight_sha256,
-            compile_gate_timestamp: null,
-            no_op_sha256: noOpEvidence.evidence_hash,
-            no_op_event_sha256: noOpEventSha256
-        }
-        : null;
-
-    return {
-        status: input.finalReportContract.status,
-        cycle_binding: input.currentCycle ? {
-            preflight_path: input.currentCycle.preflight_path,
-            preflight_sha256: input.currentCycle.preflight_sha256,
-            compile_gate_timestamp: input.currentCycle.compile_gate_timestamp
-        } : noOpBinding,
-        artifact_paths: {
-            json: toPosix(input.finalCloseoutJsonPath),
-            markdown: toPosix(input.finalCloseoutMarkdownPath),
-            final_user_report: toPosix(input.finalUserReportPath)
-        }
-    };
-}
-
-type FinalCloseoutScopeInput = Pick<BuildFinalCloseoutArtifactInput,
-    'repoRoot' | 'changedFiles' | 'workspaceSnapshotRequest' | 'taskMode' | 'preflight' | 'currentCycle'>;
-
-function buildFinalCloseoutScope(input: FinalCloseoutScopeInput) {
+export function buildFinalCloseoutArtifact(input: BuildFinalCloseoutArtifactInput): FinalCloseoutArtifact {
     const authenticatedWorkspaceSnapshotRequest = input.workspaceSnapshotRequest
         ? resolveWorkspaceSnapshotRequest(input.repoRoot, input.workspaceSnapshotRequest)
         : undefined;
@@ -530,28 +464,38 @@ function buildFinalCloseoutScope(input: FinalCloseoutScopeInput) {
             })
             : null;
 
-    return { closeoutScopeSnapshot, plannedChangedFiles, dirtyWorkspaceBaselineChangedFiles, auditedScopeProvenance, stagedAuditedScope, emptyStagedAuditedScope, implementationChangedFilesSha256, implementationScopeContentSha256, implementationScopeSha256, implementationDomainScopeFingerprints };
-}
-
-/** Retain the report's scope checks, including its last read after workflow authentication. */
-export function prepareFinalCloseoutScopeVerification(input: FinalCloseoutScopeInput): () => void {
-    const scope = buildFinalCloseoutScope(input);
-    return () => {
-        if (scope.stagedAuditedScope && !scope.closeoutScopeSnapshot && scope.emptyStagedAuditedScope)
-            buildScopeContentFingerprint(input.repoRoot, 'explicit_changed_files', []);
-    };
-}
-
-export function buildFinalCloseoutArtifact(input: BuildFinalCloseoutArtifactInput): FinalCloseoutArtifact {
-    const { closeoutScopeSnapshot, plannedChangedFiles, dirtyWorkspaceBaselineChangedFiles, auditedScopeProvenance, stagedAuditedScope, emptyStagedAuditedScope, implementationChangedFilesSha256, implementationScopeContentSha256, implementationScopeSha256, implementationDomainScopeFingerprints } = buildFinalCloseoutScope(input);
-
     const projectMemory = buildFinalCloseoutProjectMemorySummary(input.projectMemoryImpactEvidence) as FinalCloseoutProjectMemorySummary;
     const knownNonBlockingSignals = collectKnownNonBlockingSignals({
         projectMemory
     });
     const fullSuiteTimeoutSummary = buildFullSuiteTimeoutSummary(input.fullSuiteValidation);
     const workflowConfigAuditSummary = buildWorkflowConfigAuditSummary(input);
-    const verification = buildFinalCloseoutVerification(input);
+    const noOpEvidence = !input.currentCycle
+        && input.preflight
+        && isFullSuiteNotRequiredForZeroDiffNoReviewableScope(input.preflight)
+        ? getNoOpEvidence(
+            input.repoRoot,
+            input.taskId,
+            path.join(path.dirname(input.finalCloseoutJsonPath), `${input.taskId}-no-op.json`),
+            path.join(path.dirname(input.finalCloseoutJsonPath), `${input.taskId}-preflight.json`)
+        )
+        : null;
+    const noOpEventSha256 = noOpEvidence
+        ? getCurrentNoOpEventSha256(input.repoRoot, input.taskId, noOpEvidence, input.eventsRoot)
+        : null;
+    const noOpBinding = noOpEvidence?.evidence_status === 'PASS'
+        && noOpEvidence.evidence_hash
+        && noOpEvidence.preflight_path
+        && noOpEvidence.preflight_sha256
+        && noOpEventSha256
+        ? {
+            preflight_path: noOpEvidence.preflight_path,
+            preflight_sha256: noOpEvidence.preflight_sha256,
+            compile_gate_timestamp: null,
+            no_op_sha256: noOpEvidence.evidence_hash,
+            no_op_event_sha256: noOpEventSha256
+        }
+        : null;
 
     return {
         schema_version: 1,
@@ -562,8 +506,18 @@ export function buildFinalCloseoutArtifact(input: BuildFinalCloseoutArtifactInpu
         status: input.finalReportContract.status,
         blocker: input.finalReportContract.blocker,
         artifact_state: input.finalReportContract.status === 'READY' ? 'PENDING' : 'NOT_READY',
-        cycle_binding: verification.cycle_binding,
-        artifact_paths: verification.artifact_paths,
+        cycle_binding: input.currentCycle
+            ? {
+                preflight_path: input.currentCycle.preflight_path,
+                preflight_sha256: input.currentCycle.preflight_sha256,
+                compile_gate_timestamp: input.currentCycle.compile_gate_timestamp
+            }
+            : noOpBinding,
+        artifact_paths: {
+            json: toPosix(input.finalCloseoutJsonPath),
+            markdown: toPosix(input.finalCloseoutMarkdownPath),
+            final_user_report: toPosix(input.finalUserReportPath)
+        },
         implementation_summary: {
             requested_depth: parseOptionalNumber(input.taskMode?.requested_depth),
             effective_depth: parseOptionalNumber(input.taskMode?.effective_depth),

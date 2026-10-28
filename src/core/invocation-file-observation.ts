@@ -6,7 +6,7 @@ import { countNextStepWork } from './next-step-measurement';
 import { observeDerivationInput, fingerprintObservationData, markDerivationNonCacheable } from './derivation-observation-recorder';
 import {
     createInvocationReadMemoKey, isInvocationReadObservationActive,
-    memoizeInvocationRead, registerInvocationDependency, requiresInvocationContentByteValidation
+    memoizeInvocationRead, registerInvocationDependency
 } from './invocation-read-observation';
 
 
@@ -229,14 +229,6 @@ export function readInvocationFileContent(filePath: string, maximumBytes = Infin
         value => fingerprintObservationData({ sha256: value.sha256, size: value.size }))).value;
     if (!sameStat(identity, content.identity)) {
         throw new Error('Invocation alias does not match retained content: ' + alias.path);
-    }
-    if (requiresInvocationContentByteValidation()) {
-        registerInvocationDependency(content, () => {
-            const current = captureContent(canonical);
-            if (current.sha256 !== content.sha256 || current.size !== content.size) {
-                throw new Error('Invocation file bytes changed: ' + canonical.path);
-            }
-        });
     }
     return content;
 }

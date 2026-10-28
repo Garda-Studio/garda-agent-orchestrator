@@ -379,9 +379,7 @@ const JOURNAL_OWNER_PATTERN = /(?:withLifecycleRuntimeMutationGeneration(?:ForPa
 // Install mode/text and update reporting retain their existing writer and generation owners.
 // 2026-10-27 A+B audit: Q4 private-cache writer removed; verified index adds no writers.
 // All 114 bounded source files are byte-identical to the prior seal; retain their exact hash.
-// Recovery audit: strict observation and late owner, progress, dependency and payload checks add no writers.
-// Existing publication, lifecycle and producer lock/generation owners are unchanged.
-const BOUNDED_MUTATION_SURFACE_SHA256 = '17e8edad352aba10d6edc389805ffb5521abfdc8ee1bee9ffc93f74116f0ae24';
+const BOUNDED_MUTATION_SURFACE_SHA256 = 'f31e79f2c1966d6c7f4df53def162b2ed6de860daecf03f06e4b7a072c1a9c8c';
 const READ_ONLY_FS_OPERATIONS = new Set([
     'access', 'accessSync', 'close', 'closeSync', 'exists', 'existsSync',
     'fstat', 'fstatSync', 'lstat', 'lstatSync', 'open', 'opendir', 'opendirSync',
