@@ -1,5 +1,6 @@
 import * as crypto from 'node:crypto';
 import * as path from 'node:path';
+import { RETIRED_PUBLIC_BUNDLE_ASSETS } from '../../../src/core/public-bundle-assets';
 
 import { getRepoRoot } from '../build';
 import { hasReviewedSecurityWorkflow, validateCandidateReadiness, type CandidateReadinessRequest, type CandidateReadinessDependencies } from './candidate-readiness';
@@ -1198,7 +1199,7 @@ function validateReleaseReadinessContracts(repoRoot: string): ReleaseReadinessRe
                 .every((entry) => packageFiles.includes(entry)) &&
             packageFiles.every((entry) => !canPublishForbiddenPackageRoot(entry)) &&
             PUBLIC_PACKAGE_DOC_ITEMS.every((entry) => fileExists(normalizedRoot, entry)) &&
-            manifestListsEvery(manifestText, PUBLIC_PACKAGE_DOC_ITEMS),
+            manifestListsEvery(manifestText, PUBLIC_PACKAGE_DOC_ITEMS.filter(entry => !RETIRED_PUBLIC_BUNDLE_ASSETS.includes(entry))),
         [prepack || 'missing prepack', `files=${packageFiles.join(', ') || 'missing'}`]
     );
 

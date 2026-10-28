@@ -4044,3 +4044,32 @@ test('candidate readiness rejects malformed verifier repository metadata before 
         fs.rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 });
+
+test('release readiness keeps retired guides packaged without requiring deployed manifest entries', () => {
+    const repoRoot = createReadinessFixture();
+    try {
+        const manifestPath = path.join(repoRoot, 'MANIFEST.md');
+        const retiredGuides = ['docs/manual-ci.md', 'docs/node-platform-foundation.md',
+            'docs/release-readiness.md', 'docs/database/sqlite-query-adoption-evidence.md'];
+        const projectManifest = fs.readFileSync(manifestPath, 'utf8').split(/\r?\n/u)
+            .filter(line => !retiredGuides.some(guide => line.trim() === '- ' + guide)).join('\n');
+        writeFile(manifestPath, projectManifest);
+        const accepted = validateReleaseReadiness(repoRoot);
+        assert.equal(accepted.passed, true, formatReleaseReadinessResult(accepted));
+
+        const packagePath = path.join(repoRoot, 'package.json');
+        const packageBytes = fs.readFileSync(packagePath, 'utf8');
+        const packageJson = JSON.parse(packageBytes) as { files: string[] };
+        packageJson.files = packageJson.files.filter(file => file !== 'docs/manual-ci.md');
+        writeFile(packagePath, JSON.stringify(packageJson));
+        assert.ok(validateReleaseReadiness(repoRoot).violations.some(entry => entry.startsWith('packaging:')),
+            'Retired deployment guides must still be included in the published package.');
+        writeFile(packagePath, packageBytes);
+
+        writeFile(manifestPath, projectManifest.split(/\r?\n/u).filter(line => line.trim() !== '- docs/work-example.md').join('\n'));
+        assert.ok(validateReleaseReadiness(repoRoot).violations.some(entry => entry.startsWith('packaging:')),
+            'Project-facing public guides still require deployed manifest entries.');
+    } finally {
+        fs.rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+});
