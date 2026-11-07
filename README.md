@@ -14,11 +14,11 @@ Garda supports multiple AI coding agent provider surfaces through one canonical 
 
 ## Watch the 2-minute demo
 
-[![Watch the Garda Agent Orchestrator demo on YouTube](https://i.ytimg.com/vi/1J74BDu1sEI/hqdefault.jpg)](https://www.youtube.com/watch?v=1J74BDu1sEI)
+[![Watch the Garda Agent Orchestrator demo on YouTube](https://i.ytimg.com/vi/Rkh0D9fEF4I/hqdefault.jpg)](https://www.youtube.com/watch?v=Rkh0D9fEF4I)
 
 See how scoped reviews, focused fixes, tests, and completion evidence fit together. The video illustrates an Orders API workflow and includes evidence from an earlier recorded demo task.
 
-[Watch on YouTube (English captions)](https://www.youtube.com/watch?v=1J74BDu1sEI) · [Garda Studio product page](https://garda-studio.com/products/cli)
+[Watch on YouTube (English captions)](https://www.youtube.com/watch?v=Rkh0D9fEF4I) · [Garda Studio product page](https://garda-studio.com/products/cli)
 
 ## Without Garda / With Garda
 
